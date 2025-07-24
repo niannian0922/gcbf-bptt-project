@@ -1,9 +1,6 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-
+*.py[cod]
 
 # IDE / OS specific
 .vscode/
@@ -15,14 +12,10 @@ build/
 dist/
 *.egg-info/
 
-# Log files
-*.log.DS_Store
-.idea/
-__pycache__/
-wandb
-logs
-figs
+# Log and Media files
+logs/
+figs/
 videos/
 wandb/
 test_log.csv
-*.egg-info
+*.log
