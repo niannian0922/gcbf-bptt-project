@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+.venv/
+venv/
+env/
+
+# IDE / OS specific
+.vscode/
+.idea/
+.DS_Store
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Log files
+*.log.DS_Store
+.idea/
+__pycache__/
+wandb
+logs
+figs
+videos/
+wandb/
+test_log.csv
+*.egg-info
