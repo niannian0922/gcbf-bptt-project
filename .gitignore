@@ -19,3 +19,4 @@ videos/
 wandb/
 test_log.csv
 *.log
+.venv
