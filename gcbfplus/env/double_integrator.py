@@ -5,6 +5,7 @@ from typing import Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 
 from .multi_agent_env import MultiAgentEnv, MultiAgentState, StepResult
+from ..utils.autograd import g_decay
 
 
 @dataclass
@@ -37,6 +38,7 @@ class DoubleIntegratorEnv(MultiAgentEnv):
                 Optional keys:
                 - 'max_steps': Maximum episode length
                 - 'max_force': Maximum force magnitude
+                - 'gradient_decay_rate': Rate at which gradients decay through time
         """
         super(DoubleIntegratorEnv, self).__init__(config)
         
@@ -47,6 +49,12 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         self.vel_dim = 2  # 2D velocities (vx, vy)
         self.state_dim = 4  # x, y, vx, vy
         self.action_dim = 2  # fx, fy
+        
+        # Gradient decay parameters
+        training_config = config.get('training', {})
+        self.gradient_decay_rate = training_config.get('gradient_decay_rate', 0.95)
+        self.use_gradient_decay = self.gradient_decay_rate > 0.0
+        self.training = True  # Default to training mode
         
         # Register the state transition matrices as buffers
         # State transition: x_{t+1} = A * x_t + B * u_t
@@ -232,9 +240,18 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         # Compute state derivatives using dynamics
         derivatives = self.dynamics(state, safe_action)
         
-        # Update positions and velocities using Euler integration
-        new_positions = state.positions + state.velocities * self.dt
-        new_velocities = state.velocities + (safe_action / self.mass) * self.dt
+        # Update positions and velocities using Euler integration with gradient decay
+        if self.use_gradient_decay and self.training:
+            # Apply gradient decay to stabilize training
+            positions_decayed = g_decay(state.positions, self.gradient_decay_rate)
+            velocities_decayed = g_decay(state.velocities, self.gradient_decay_rate)
+            
+            new_positions = positions_decayed + velocities_decayed * self.dt
+            new_velocities = velocities_decayed + (safe_action / self.mass) * self.dt
+        else:
+            # Standard update without gradient decay
+            new_positions = state.positions + state.velocities * self.dt
+            new_velocities = state.velocities + (safe_action / self.mass) * self.dt
         
         # Create next state
         next_state = DoubleIntegratorState(
@@ -424,3 +441,11 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         derivatives = derivatives.reshape(batch_size, self.num_agents, self.state_dim)
         
         return derivatives
+
+    def train(self) -> None:
+        """Set environment to training mode. This enables gradient decay."""
+        self.training = True
+    
+    def eval(self) -> None:
+        """Set environment to evaluation mode. This disables gradient decay."""
+        self.training = False

@@ -76,6 +76,7 @@ class BPTTTrainer:
         self.goal_weight = self.config.get('goal_weight', 1.0)
         self.safety_weight = self.config.get('safety_weight', 10.0)
         self.control_weight = self.config.get('control_weight', 0.1)
+        self.jerk_weight = self.config.get('jerk_weight', 0.05)  # Weight for jerk penalty
         self.cbf_alpha = self.config.get('cbf_alpha', 1.0)
         
         # Create directories for logging
@@ -208,6 +209,18 @@ class BPTTTrainer:
             stacked_actions = torch.stack(trajectory_actions)
             control_effort = torch.mean(stacked_actions ** 2)
             
+            # Jerk loss (rate of change of acceleration)
+            # Calculate differences between consecutive actions
+            jerk_loss = 0.0
+            if len(trajectory_actions) > 1:
+                action_diffs = []
+                for i in range(1, len(trajectory_actions)):
+                    action_diff = trajectory_actions[i] - trajectory_actions[i-1]
+                    action_diffs.append(action_diff)
+                if action_diffs:
+                    stacked_diffs = torch.stack(action_diffs)
+                    jerk_loss = torch.mean(stacked_diffs ** 2)
+            
             # Safety loss
             if safety_losses:
                 stacked_safety = torch.stack(safety_losses)
@@ -221,7 +234,8 @@ class BPTTTrainer:
             total_loss = (
                 self.goal_weight * goal_loss +
                 self.safety_weight * total_safety_loss +
-                self.control_weight * control_effort
+                self.control_weight * control_effort +
+                self.jerk_weight * jerk_loss  # Add jerk penalty
             )
             
             # Backpropagate loss through the entire computation graph
@@ -248,6 +262,7 @@ class BPTTTrainer:
                 "train/goal_loss": goal_loss.item(),
                 "train/safety_loss": total_safety_loss.item(),
                 "train/control_loss": control_effort.item(),
+                "train/jerk_loss": jerk_loss if isinstance(jerk_loss, float) else jerk_loss.item(),
                 "train/lr": self.optimizer.param_groups[0]['lr'],
                 "step": step,
             }
@@ -268,6 +283,8 @@ class BPTTTrainer:
                 print(f"  Total Loss: {total_loss.item():.4f}")
                 print(f"  Goal Loss: {goal_loss.item():.4f}")
                 print(f"  Safety Loss: {total_safety_loss.item():.4f}")
+                print(f"  Control Loss: {control_effort.item():.4f}")
+                print(f"  Jerk Loss: {jerk_loss if isinstance(jerk_loss, float) else jerk_loss.item():.4f}")
                 print(f"  Evaluation Success Rate: {eval_metrics['eval/success_rate']:.2f}")
                 print(f"  Evaluation Collision Rate: {eval_metrics['eval/collision_rate']:.2f}")
             
@@ -307,10 +324,14 @@ class BPTTTrainer:
         avg_goal_distance = 0
         avg_min_cbf = float('inf')
         
-        # Set networks to evaluation mode
+        # Set networks and environment to evaluation mode
         self.policy_network.eval()
         if self.cbf_network is not None:
             self.cbf_network.eval()
+        
+        # Set environment to eval mode (disables gradient decay)
+        if hasattr(self.env, 'eval'):
+            self.env.eval()
         
         for _ in range(num_episodes):
             # Initialize scenario
@@ -356,10 +377,14 @@ class BPTTTrainer:
                 if torch.all(goal_distances < self.env.agent_radius * 2):
                     success_count += 1
         
-        # Set networks back to training mode
+        # Set networks and environment back to training mode
         self.policy_network.train()
         if self.cbf_network is not None:
             self.cbf_network.train()
+            
+        # Set environment back to training mode
+        if hasattr(self.env, 'train'):
+            self.env.train()
         
         # Compute average metrics
         success_rate = success_count / num_episodes

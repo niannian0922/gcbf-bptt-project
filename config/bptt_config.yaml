@@ -51,9 +51,13 @@ training:
   use_lr_scheduler: true          # Whether to use learning rate scheduler
   lr_step_size: 2000              # Step size for learning rate scheduler
   lr_gamma: 0.5                   # Multiplier for learning rate scheduler
+  
+  # Gradient decay for temporal stability
+  gradient_decay_rate: 0.95       # Rate at which gradients decay through time
 
   # Loss weights
   goal_weight: 1.0                # Weight for goal reaching loss
   safety_weight: 10.0             # Weight for safety loss (CBF violation)
   control_weight: 0.1             # Weight for control effort loss
+  jerk_weight: 0.05               # Weight for jerk penalty (rate of change of action)
   cbf_alpha: 1.0                  # Alpha parameter in CBF condition (h_dot + alpha*h >= 0) 
