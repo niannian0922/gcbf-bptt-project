@@ -230,11 +230,19 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         Returns:
             StepResult containing next_state, reward, cost, done, info
         """
+        # Ensure action is on the correct device first
+        action = action.to(self.device)
+        
         # Apply safety layer if it exists (default implementation just returns the action)
         safe_action = self.apply_safety_layer(state, action)
         
+        # Ensure safe_action is also on the correct device
+        safe_action = safe_action.to(self.device)
+        
         # Clip action to bounds
-        lower_bound, upper_bound = self.get_action_bounds()
+        # Ensure bounds are on the same device as the state and actions
+        lower_bound = torch.tensor([-1.0, -1.0], device=self.device, dtype=safe_action.dtype)
+        upper_bound = torch.tensor([1.0, 1.0], device=self.device, dtype=safe_action.dtype)
         safe_action = torch.clamp(safe_action, lower_bound, upper_bound)
         
         # Compute state derivatives using dynamics

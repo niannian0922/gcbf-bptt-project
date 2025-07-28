@@ -27,12 +27,12 @@ networks:
 
 # Training parameters
 training:
-  training_steps: 1000
+  training_steps: 20000
   batch_size: 1
   horizon: 50
   eval_horizon: 50
   learning_rate: 0.001
-  save_interval: 500
+  save_interval: 2000
   eval_interval: 100
   goal_loss_weight: 1.0
   control_loss_weight: 0.01

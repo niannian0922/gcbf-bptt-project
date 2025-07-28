@@ -71,6 +71,9 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
             # Get observations from state
             observations = env.get_observation(state)
             
+            # Move observations to device for network processing
+            observations = observations.to(device)
+            
             # Get CBF values if CBF network is available
             if cbf_network is not None:
                 h_vals = cbf_network(observations)
@@ -290,10 +293,12 @@ def main():
     parser.add_argument("--metrics_output", type=str, default=None, help="Path to save metrics as JSON (optional)")
     args = parser.parse_args()
     
-    # Set up the device
-    use_cuda = args.cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
+    # Set up the device - Force GPU usage if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Legacy support for cuda flag
+    use_cuda = torch.cuda.is_available()
     
     # Load configuration
     config_path = Path(args.model_dir) / "config.yaml"

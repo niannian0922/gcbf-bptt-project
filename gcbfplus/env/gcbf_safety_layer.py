@@ -44,7 +44,7 @@ class GCBFSafetyLayer(nn.Module):
         self.max_iterations = config.get('max_iterations', 10)
         
         # Register parameters
-        self.register_buffer('alpha_tensor', torch.tensor([self.alpha]))
+        self.register_buffer('alpha_tensor', torch.tensor([self.alpha], dtype=torch.float32))
         
     def barrier_function(self, state: MultiAgentState) -> torch.Tensor:
         """

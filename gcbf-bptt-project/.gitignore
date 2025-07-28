@@ -1,0 +1,27 @@
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+.venv/
+venv/
+env/
+
+# IDE / OS specific
+.vscode/
+.idea/pip install -r requirements.txt
+
+# Log files
+*.log.DS_Store
+.idea/
+__pycache__/
+wandb
+logs
+figs
+videos/
+wandb/
+test_log.csv
+*.egg-info

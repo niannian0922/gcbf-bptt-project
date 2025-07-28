@@ -403,6 +403,7 @@ class EnsemblePolicy(nn.Module):
         
         # If using weighted ensemble, create weights parameter
         if self.ensemble_method == 'weighted':
+            # Device will be set when the model is moved to device
             self.weights = nn.Parameter(torch.ones(num_policies) / num_policies)
         
         # Store configuration

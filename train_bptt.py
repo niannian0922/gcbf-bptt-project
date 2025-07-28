@@ -23,10 +23,12 @@ def main():
     parser.add_argument("--load_checkpoint", type=str, help="Load from checkpoint")
     args = parser.parse_args()
     
-    # Set up the device
-    use_cuda = args.cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
+    # Set up the device - Force GPU usage if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Legacy support for cuda flag
+    use_cuda = torch.cuda.is_available()
     
     # Set random seeds for reproducibility
     torch.manual_seed(args.seed)

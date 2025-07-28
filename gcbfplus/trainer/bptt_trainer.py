@@ -167,7 +167,8 @@ class BPTTTrainer:
                 # Get observations from state
                 observations = self.env.get_observation(current_state)
                 
-                # Get actions from policy network
+                # Move observations to the correct device (CPU or GPU) before feeding to the network
+                observations = observations.to(self.device)
                 actions = self.policy_network(observations)
                 # Store a detached copy for backprop later
                 trajectory_actions.append(actions.clone())
@@ -346,6 +347,9 @@ class BPTTTrainer:
                 for _ in range(self.eval_horizon):
                     # Get observations
                     observations = self.env.get_observation(current_state)
+                    
+                    # Move observations to the correct device (CPU or GPU) before feeding to the network
+                    observations = observations.to(self.device)
                     
                     # Get CBF values if available
                     if self.cbf_network is not None:

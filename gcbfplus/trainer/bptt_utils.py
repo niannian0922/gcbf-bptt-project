@@ -74,7 +74,7 @@ def initialize_states_and_goals(
                 goal = states[i, :pos_dim] + torch.tensor([
                     torch.cos(angle) * distance,
                     torch.sin(angle) * distance
-                ], device=device)
+                ], device=device, dtype=states.dtype)
                 # Ensure goal is within bounds
                 goal = torch.clamp(goal, min=0, max=area_size)
             

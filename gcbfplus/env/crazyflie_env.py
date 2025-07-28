@@ -117,7 +117,7 @@ class CrazyFlieEnv(MultiAgentEnv):
             [0, -self.d*self.CT, 0, self.d*self.CT],  # tau_x
             [self.d*self.CT, 0, -self.d*self.CT, 0],  # tau_y
             [self.CD, -self.CD, self.CD, -self.CD]  # tau_z
-        ])
+        ], dtype=torch.float32)
         self.register_buffer('motor_config', motor_config)
         
         # Try to compute the inverse of the motor configuration matrix
@@ -322,8 +322,8 @@ class CrazyFlieEnv(MultiAgentEnv):
         q = angular_velocities_flat[:, 1]  # Pitch rate
         r = angular_velocities_flat[:, 0]  # Yaw rate
         
-        # Reshape actions
-        actions_flat = action.reshape(total_agents, self.action_dim)
+        # Reshape actions and ensure they're on the same device as motor_config
+        actions_flat = action.reshape(total_agents, self.action_dim).to(self.motor_config.device)
         
         # Apply motor configuration to get forces and torques
         # [F_z, tau_x, tau_y, tau_z]
@@ -508,8 +508,14 @@ class CrazyFlieEnv(MultiAgentEnv):
         Returns:
             StepResult containing next_state, reward, cost, done, info
         """
+        # Ensure action is on the correct device first
+        action = action.to(self.device)
+        
         # Apply safety layer if it exists (default implementation just returns the action)
         safe_action = self.apply_safety_layer(state, action)
+        
+        # Ensure safe_action is also on the correct device
+        safe_action = safe_action.to(self.device)
         
         # Clip action to bounds
         lower_bound, upper_bound = self.get_action_bounds()
