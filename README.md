@@ -92,27 +92,8 @@ python visualize_bptt.py --model_dir logs/bptt --env_type double_integrator
 
 `config/bottleneck_dynamic_alpha.yaml`: 动态Alpha瓶颈实验配置
 `config/bottleneck_fixed_alpha_*.yaml`: 固定Alpha基线配置
- `config/bptt_config.yaml`: 标准BPTT训练配置
+`config/bptt_config.yaml`: 标准BPTT训练配置
 
-项目结构
-
-gcbf-bptt-project/
-├── gcbfplus/                    # 核心代码库
-│   ├── policy/                  # 策略网络实现
-│   │   └── bptt_policy.py      # BPTT策略（支持动态Alpha）
-│   ├── trainer/                 # 训练器模块
-│   │   ├── bptt_trainer.py     # 主训练器
-│   │   └── bottleneck_metrics.py # 瓶颈场景评估指标
-│   ├── env/                     # 环境实现
-│   │   ├── double_integrator.py # 双积分器环境
-│   │   ├── multi_agent_env.py  # 多智能体基础环境
-│   │   └── gcbf_safety_layer.py # GCBF安全层
-│   └── utils/                   # 工具模块
-│       └── autograd.py         # 梯度衰减实现
-├── config/                      # 配置文件
-├── logs/                        # 训练日志和模型
-├── media/                       # 实验结果展示
-└── requirements.txt             # 依赖列表
 
 
 核心评估指标
@@ -127,31 +108,20 @@ gcbf-bptt-project/
 吞吐量：每秒通过瓶颈的智能体数量
 速度波动：瓶颈区域内速度标准差
 总等待时间：低速状态的累计时间
--协调效：基于流畅度和吞吐量的综合评分
+协调效：基于流畅度和吞吐量的综合评分
 
 技术路线图
-已完成功能 ✅
-基础BPTT训练框架
-自适应安全边距（动态Alpha）
-时序梯度衰减机制
-加速度变化率惩罚
-视觉导航支持（CRNN架构）
-瓶颈场景专项评估
+已经完成的一些功能 
+1.基础BPTT训练框架
+2.自适应安全边距（动态Alpha）
+3.时序梯度衰减机制
+4.加速度变化率惩罚
+5.视觉导航支持（CRNN架构）
+6.瓶颈场景专项评估
 
-未来发展方向 
-更复杂的3D导航场景
-异构智能体支持
-分布式训练优化
-实际机器人平台验证
 
-学术贡献
 
-1. 方法创新：首次提出策略网络动态预测CBF安全参数的方法
-2. 技术融合：将GCBF安全保证与BPTT端到端优化有效结合
-3. 性能提升：在保证安全的前提下显著提升多智能体协调效率
-4. 评估体系：建立了瓶颈场景下的专项协调评估指标
-
- 引用
+引用
 
 如果您在研究中使用了本项目，请引用：
 
@@ -164,14 +134,10 @@ gcbf-bptt-project/
 }
 ```
 
-许可证
-
-本项目采用MIT许可证 - 详见 [LICENSE](LICENSE) 文件。
 
 联系方式
-
 如有技术问题或学术讨论，欢迎联系：
- 邮箱：jihaoye0922@gmail.com
- 项目主页：https://github.com/your-username/gcbf-bptt-project
+邮箱：jihaoye0922@gmail.com
+项目主页：https://github.com/niannian0922/gcbf-bptt-project
 
  
