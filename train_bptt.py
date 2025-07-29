@@ -76,35 +76,66 @@ def main():
     env = env.to(device)
     
     # 2. Create policy network
-    # Get configuration values with defaults
-    hidden_dim = policy_network_config.get('hidden_dim', 64)
-    n_layers = policy_network_config.get('n_layers', 2)
-    
-    # Prepare policy configuration
-    # Ensure we correctly determine the observation dimension from the environment
-    obs_dim = env.observation_shape[-1]
-    print(f"Environment observation dimension: {obs_dim}")
-    
-    policy_config = {
-        'type': 'bptt',
-        'perception': {
-            'input_dim': obs_dim,  # Use the environment's observation dimension
-            'hidden_dim': hidden_dim,
-            'num_layers': n_layers,
-            'activation': 'relu',
-            'use_batch_norm': False
-        },
-        'memory': {
-            'hidden_dim': hidden_dim,
-            'num_layers': 1
-        },
-        'policy_head': {
-            'output_dim': env.action_shape[-1],  # Last dimension of action shape
-            'hidden_dims': [hidden_dim],
-            'action_scaling': True,
-            'action_bound': 1.0
+    # Use the policy configuration from YAML file
+    if policy_network_config:
+        # Use configuration from YAML file (supports vision and other advanced features)
+        policy_config = policy_network_config.copy()
+        policy_config['type'] = 'bptt'
+        
+        # Ensure policy_head has correct output dimension
+        if 'policy_head' not in policy_config:
+            policy_config['policy_head'] = {}
+        policy_config['policy_head']['output_dim'] = env.action_shape[-1]
+        
+        # Add default values for missing perception config if needed
+        if 'perception' not in policy_config:
+            hidden_dim = policy_network_config.get('hidden_dim', 64)
+            n_layers = policy_network_config.get('n_layers', 2)
+            obs_dim = env.observation_shape[-1]
+            print(f"Environment observation dimension: {obs_dim}")
+            
+            policy_config['perception'] = {
+                'input_dim': obs_dim,
+                'hidden_dim': hidden_dim,
+                'num_layers': n_layers,
+                'activation': 'relu',
+                'use_batch_norm': False
+            }
+        
+        # Add default memory config if needed
+        if 'memory' not in policy_config:
+            hidden_dim = policy_network_config.get('hidden_dim', 64)
+            policy_config['memory'] = {
+                'hidden_dim': hidden_dim,
+                'num_layers': 1
+            }
+    else:
+        # Fallback: create default configuration if no policy config in YAML
+        hidden_dim = 64
+        n_layers = 2
+        obs_dim = env.observation_shape[-1]
+        print(f"Environment observation dimension: {obs_dim}")
+        
+        policy_config = {
+            'type': 'bptt',
+            'perception': {
+                'input_dim': obs_dim,
+                'hidden_dim': hidden_dim,
+                'num_layers': n_layers,
+                'activation': 'relu',
+                'use_batch_norm': False
+            },
+            'memory': {
+                'hidden_dim': hidden_dim,
+                'num_layers': 1
+            },
+            'policy_head': {
+                'output_dim': env.action_shape[-1],
+                'hidden_dims': [hidden_dim],
+                'action_scaling': True,
+                'action_bound': 1.0
+            }
         }
-    }
     
     # Create the policy network
     policy_network = create_policy_from_config(policy_config)

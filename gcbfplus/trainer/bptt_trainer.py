@@ -77,6 +77,7 @@ class BPTTTrainer:
         self.safety_weight = self.config.get('safety_weight', 10.0)
         self.control_weight = self.config.get('control_weight', 0.1)
         self.jerk_weight = self.config.get('jerk_weight', 0.05)  # Weight for jerk penalty
+        self.alpha_reg_weight = self.config.get('alpha_reg_weight', 0.01)  # Weight for alpha regularization
         self.cbf_alpha = self.config.get('cbf_alpha', 1.0)
         
         # Create directories for logging
@@ -138,6 +139,9 @@ class BPTTTrainer:
         
         start_time = time.time()
         
+        # Set environment to training mode to enable gradient decay
+        self.env.train()
+        
         pbar = tqdm(total=self.training_steps)
         for step in range(self.training_steps):
             # Train mode
@@ -154,6 +158,7 @@ class BPTTTrainer:
             # BPTT Rollout
             trajectory_states = []
             trajectory_actions = []
+            trajectory_alphas = []
             trajectory_rewards = []
             trajectory_costs = []
             safety_losses = []
@@ -169,9 +174,10 @@ class BPTTTrainer:
                 
                 # Move observations to the correct device (CPU or GPU) before feeding to the network
                 observations = observations.to(self.device)
-                actions = self.policy_network(observations)
-                # Store a detached copy for backprop later
+                actions, alpha = self.policy_network(observations)
+                # Store detached copies for backprop later
                 trajectory_actions.append(actions.clone())
+                trajectory_alphas.append(alpha.clone())
                 
                 # Apply safety filter if CBF network is provided
                 if self.cbf_network is not None:
@@ -182,8 +188,8 @@ class BPTTTrainer:
                     safety_loss = torch.mean(torch.relu(-cbf_values))
                     safety_losses.append(safety_loss)
                 
-                # Take a step in the environment
-                step_result = self.env.step(current_state, actions)
+                # Take a step in the environment with dynamic alpha
+                step_result = self.env.step(current_state, actions, alpha)
                 next_state = step_result.next_state
                 rewards = step_result.reward
                 costs = step_result.cost
@@ -231,12 +237,17 @@ class BPTTTrainer:
                 stacked_costs = torch.stack(trajectory_costs)
                 total_safety_loss = torch.mean(stacked_costs)
             
+            # Alpha regularization loss (encourage smaller alpha values for efficiency)
+            stacked_alphas = torch.stack(trajectory_alphas)
+            alpha_regularization_loss = torch.mean(stacked_alphas)
+            
             # Compute total loss as weighted sum
             total_loss = (
                 self.goal_weight * goal_loss +
                 self.safety_weight * total_safety_loss +
                 self.control_weight * control_effort +
-                self.jerk_weight * jerk_loss  # Add jerk penalty
+                self.jerk_weight * jerk_loss +  # Add jerk penalty
+                self.alpha_reg_weight * alpha_regularization_loss  # Add alpha regularization
             )
             
             # Backpropagate loss through the entire computation graph
@@ -264,6 +275,8 @@ class BPTTTrainer:
                 "train/safety_loss": total_safety_loss.item(),
                 "train/control_loss": control_effort.item(),
                 "train/jerk_loss": jerk_loss if isinstance(jerk_loss, float) else jerk_loss.item(),
+                "train/alpha_reg_loss": alpha_regularization_loss.item(),
+                "train/avg_alpha": torch.mean(stacked_alphas).item(),
                 "train/lr": self.optimizer.param_groups[0]['lr'],
                 "step": step,
             }
@@ -286,6 +299,8 @@ class BPTTTrainer:
                 print(f"  Safety Loss: {total_safety_loss.item():.4f}")
                 print(f"  Control Loss: {control_effort.item():.4f}")
                 print(f"  Jerk Loss: {jerk_loss if isinstance(jerk_loss, float) else jerk_loss.item():.4f}")
+                print(f"  Alpha Reg Loss: {alpha_regularization_loss.item():.4f}")
+                print(f"  Avg Alpha: {torch.mean(stacked_alphas).item():.4f}")
                 print(f"  Evaluation Success Rate: {eval_metrics['eval/success_rate']:.2f}")
                 print(f"  Evaluation Collision Rate: {eval_metrics['eval/collision_rate']:.2f}")
             
@@ -357,11 +372,11 @@ class BPTTTrainer:
                         min_cbf_val = cbf_values.min().item()
                         avg_min_cbf = min(avg_min_cbf, min_cbf_val)
                     
-                    # Get actions from policy network
-                    actions = self.policy_network(observations)
+                    # Get actions and alpha from policy network
+                    actions, alpha = self.policy_network(observations)
                     
-                    # Step simulation
-                    step_result = self.env.step(current_state, actions)
+                    # Step simulation with dynamic alpha
+                    step_result = self.env.step(current_state, actions, alpha)
                     next_state = step_result.next_state
                     
                     # Check for collisions

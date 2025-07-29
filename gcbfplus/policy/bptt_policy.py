@@ -9,8 +9,8 @@ class PerceptionModule(nn.Module):
     Perception module for processing sensory input.
     
     This module can be configured to handle different types of inputs:
-    - Graph-based observations (using GNNs)
-    - Dense vector observations (using MLPs)
+    - Vision-based observations (using CNNs for depth images)
+    - Dense vector observations (using MLPs for state vectors)
     """
     
     def __init__(self, config: Dict):
@@ -19,6 +19,14 @@ class PerceptionModule(nn.Module):
         
         Args:
             config: Configuration dictionary with keys:
+                For vision mode:
+                - 'vision_enabled': Whether to use vision-based processing
+                - 'input_channels': Number of input channels (default: 1 for depth)
+                - 'conv_channels': List of CNN channel sizes
+                - 'kernel_sizes': List of kernel sizes for each conv layer
+                - 'image_size': Input image size (assumed square)
+                
+                For state mode:
                 - 'input_dim': Input dimension size
                 - 'hidden_dim': Hidden dimension size
                 - 'num_layers': Number of hidden layers
@@ -27,12 +35,10 @@ class PerceptionModule(nn.Module):
         """
         super(PerceptionModule, self).__init__()
         
-        # Extract configuration parameters with a default that matches our environment
-        input_dim = config.get('input_dim', 9)  # Changed default from 12 to 9 to match environment
+        # Check if vision mode is enabled
+        self.vision_enabled = config.get('vision_enabled', False)
         hidden_dim = config.get('hidden_dim', 64)
-        num_layers = config.get('num_layers', 2)
         activation = config.get('activation', 'relu')
-        use_batch_norm = config.get('use_batch_norm', False)
         
         # Select activation function
         if activation == 'relu':
@@ -44,52 +50,117 @@ class PerceptionModule(nn.Module):
         else:
             self.activation = nn.ReLU()
         
-        # Build MLP layers
-        layers = []
-        
-        # Input layer
-        layers.append(nn.Linear(input_dim, hidden_dim))
-        if use_batch_norm:
-            layers.append(nn.BatchNorm1d(hidden_dim))
-        layers.append(self.activation)
-        
-        # Hidden layers
-        for _ in range(num_layers - 1):
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
+        if self.vision_enabled:
+            # Vision-based processing with CNN
+            input_channels = config.get('input_channels', 1)  # Depth images
+            conv_channels = config.get('conv_channels', [32, 64, 128])
+            kernel_sizes = config.get('kernel_sizes', [5, 3, 3])
+            image_size = config.get('image_size', 64)
+            
+            # Build CNN layers
+            cnn_layers = []
+            in_channels = input_channels
+            
+            for i, (out_channels, kernel_size) in enumerate(zip(conv_channels, kernel_sizes)):
+                cnn_layers.append(nn.Conv2d(in_channels, out_channels, kernel_size, 
+                                           stride=2, padding=kernel_size//2))
+                cnn_layers.append(nn.BatchNorm2d(out_channels))
+                cnn_layers.append(self.activation)
+                in_channels = out_channels
+            
+            self.cnn = nn.Sequential(*cnn_layers)
+            
+            # Calculate the size after convolutions
+            # Each conv layer with stride=2 halves the spatial dimensions
+            final_size = image_size // (2 ** len(conv_channels))
+            cnn_output_size = conv_channels[-1] * final_size * final_size
+            
+            # Final MLP to get desired output dimension
+            self.cnn_projection = nn.Sequential(
+                nn.Linear(cnn_output_size, hidden_dim),
+                self.activation,
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            
+            self.output_dim = hidden_dim
+            
+        else:
+            # State-based processing with MLP (original implementation)
+            input_dim = config.get('input_dim', 9)
+            num_layers = config.get('num_layers', 2)
+            use_batch_norm = config.get('use_batch_norm', False)
+            
+            # Build MLP layers
+            layers = []
+            
+            # Input layer
+            layers.append(nn.Linear(input_dim, hidden_dim))
             if use_batch_norm:
                 layers.append(nn.BatchNorm1d(hidden_dim))
             layers.append(self.activation)
-        
-        self.network = nn.Sequential(*layers)
-        self.output_dim = hidden_dim
+            
+            # Hidden layers
+            for _ in range(num_layers - 1):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_batch_norm:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(self.activation)
+            
+            self.mlp = nn.Sequential(*layers)
+            self.output_dim = hidden_dim
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Process input through perception module.
         
         Args:
-            x: Input tensor [batch_size, n_agents, input_dim] or [batch_size, input_dim]
+            x: Input tensor 
+               - Vision mode: [batch_size, n_agents, channels, height, width]
+               - State mode: [batch_size, n_agents, input_dim] or [batch_size, input_dim]
             
         Returns:
             Processed features [batch_size, output_dim] or [batch_size, n_agents, output_dim]
         """
         original_shape = x.shape
         
-        # Handle multi-agent observations
-        if len(original_shape) == 3:
-            batch_size, n_agents, input_dim = original_shape
-            
-            # Reshape to [batch_size * n_agents, input_dim]
-            x_flat = x.reshape(batch_size * n_agents, input_dim)
-            
-            # Process through network
-            features = self.network(x_flat)
-            
-            # Reshape back to [batch_size, n_agents, output_dim]
-            return features.view(batch_size, n_agents, -1)
+        if self.vision_enabled:
+            # Handle vision inputs: [batch_size, n_agents, channels, height, width]
+            if len(original_shape) == 5:
+                batch_size, n_agents, channels, height, width = original_shape
+                
+                # Reshape to [batch_size * n_agents, channels, height, width]
+                x_flat = x.reshape(batch_size * n_agents, channels, height, width)
+                
+                # Process through CNN
+                cnn_features = self.cnn(x_flat)  # [batch_size * n_agents, final_channels, final_h, final_w]
+                
+                # Flatten spatial dimensions
+                cnn_flat = cnn_features.view(cnn_features.size(0), -1)  # [batch_size * n_agents, flat_size]
+                
+                # Project to desired output dimension
+                features = self.cnn_projection(cnn_flat)  # [batch_size * n_agents, output_dim]
+                
+                # Reshape back to [batch_size, n_agents, output_dim]
+                return features.view(batch_size, n_agents, -1)
+            else:
+                raise ValueError(f"Vision mode expects 5D input [batch, agents, channels, height, width], got {original_shape}")
+        
         else:
-            # For simple batch processing [batch_size, input_dim]
-            return self.network(x)
+            # Handle state-based inputs (original implementation)
+            if len(original_shape) == 3:
+                batch_size, n_agents, input_dim = original_shape
+                
+                # Reshape to [batch_size * n_agents, input_dim]
+                x_flat = x.reshape(batch_size * n_agents, input_dim)
+                
+                # Process through MLP
+                features = self.mlp(x_flat)
+                
+                # Reshape back to [batch_size, n_agents, output_dim]
+                return features.view(batch_size, n_agents, -1)
+            else:
+                # For simple batch processing [batch_size, input_dim]
+                return self.mlp(x)
 
 
 class MemoryModule(nn.Module):
@@ -236,31 +307,43 @@ class PolicyHeadModule(nn.Module):
         else:
             self.output_activation = nn.Identity()
         
-        # Build MLP layers
-        layers = []
+        # Build action prediction MLP layers
+        action_layers = []
         prev_dim = input_dim
         
-        # Hidden layers
+        # Hidden layers for actions
         for hidden_dim in hidden_dims:
-            layers.append(nn.Linear(prev_dim, hidden_dim))
-            layers.append(self.activation)
+            action_layers.append(nn.Linear(prev_dim, hidden_dim))
+            action_layers.append(self.activation)
             prev_dim = hidden_dim
         
-        # Output layer
-        layers.append(nn.Linear(prev_dim, output_dim))
+        # Action output layer
+        action_layers.append(nn.Linear(prev_dim, output_dim))
         
-        self.network = nn.Sequential(*layers)
+        self.action_network = nn.Sequential(*action_layers)
+        
+        # Build alpha prediction MLP (smaller network for efficiency)
+        alpha_hidden_dim = hidden_dims[0] // 2 if hidden_dims else 32  # Smaller network
+        self.alpha_network = nn.Sequential(
+            nn.Linear(input_dim, alpha_hidden_dim),
+            self.activation,
+            nn.Linear(alpha_hidden_dim, 1),  # Predict single alpha per agent
+            nn.Softplus()  # Ensure alpha > 0
+        )
+        
         self.output_dim = output_dim
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> tuple:
         """
-        Generate actions from features.
+        Generate actions and alpha values from features.
         
         Args:
             x: Input features [batch_size, input_dim] or [batch_size, n_agents, input_dim]
             
         Returns:
-            Action outputs [batch_size, output_dim] or [batch_size, n_agents, output_dim]
+            Tuple of (actions, alpha) where:
+            - actions: [batch_size, output_dim] or [batch_size, n_agents, output_dim]
+            - alpha: [batch_size, 1] or [batch_size, n_agents, 1] - CBF safety parameter
         """
         original_shape = x.shape
         
@@ -271,8 +354,8 @@ class PolicyHeadModule(nn.Module):
             # Reshape to [batch_size * n_agents, input_dim]
             x_flat = x.reshape(batch_size * n_agents, input_dim)
             
-            # Process through network
-            actions = self.network(x_flat)
+            # Process through action network
+            actions = self.action_network(x_flat)
             
             # Apply output activation
             actions = self.output_activation(actions)
@@ -281,18 +364,27 @@ class PolicyHeadModule(nn.Module):
             if self.action_scaling:
                 actions = actions * self.action_bound
             
-            # Reshape back to [batch_size, n_agents, output_dim]
-            return actions.view(batch_size, n_agents, -1)
+            # Process through alpha network
+            alpha = self.alpha_network(x_flat)
+            
+            # Reshape back to [batch_size, n_agents, -1]
+            actions = actions.view(batch_size, n_agents, -1)
+            alpha = alpha.view(batch_size, n_agents, -1)
+            
+            return actions, alpha
         else:
             # For simple batch processing
-            actions = self.network(x)
+            actions = self.action_network(x)
             actions = self.output_activation(actions)
             
             # Scale actions if needed
             if self.action_scaling:
                 actions = actions * self.action_bound
+            
+            # Process through alpha network
+            alpha = self.alpha_network(x)
                 
-            return actions
+            return actions, alpha
 
 
 class BPTTPolicy(nn.Module):
@@ -343,16 +435,18 @@ class BPTTPolicy(nn.Module):
         # Store configuration
         self.config = config
     
-    def forward(self, x: torch.Tensor, reset_memory: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, reset_memory: bool = False) -> tuple:
         """
-        Process observations and generate actions.
+        Process observations and generate actions and alpha values.
         
         Args:
             x: Observation tensor [batch_size, *obs_shape]
             reset_memory: Whether to reset the memory state
             
         Returns:
-            Action outputs [batch_size, action_dim]
+            Tuple of (actions, alpha) where:
+            - actions: Action outputs [batch_size, action_dim]
+            - alpha: CBF safety parameter [batch_size, 1]
         """
         # Process through perception module
         features = self.perception(x)
@@ -360,10 +454,10 @@ class BPTTPolicy(nn.Module):
         # Process through memory module
         memory_features = self.memory(features, reset_memory)
         
-        # Generate actions through policy head
-        actions = self.head(memory_features)
+        # Generate actions and alpha through policy head
+        actions, alpha = self.head(memory_features)
         
-        return actions
+        return actions, alpha
     
     def reset(self) -> None:
         """Reset the policy's internal state (e.g., memory)."""
@@ -409,7 +503,7 @@ class EnsemblePolicy(nn.Module):
         # Store configuration
         self.config = config
     
-    def forward(self, x: torch.Tensor, reset_memory: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, reset_memory: bool = False) -> tuple:
         """
         Process observations through the ensemble and combine outputs.
         
@@ -418,27 +512,37 @@ class EnsemblePolicy(nn.Module):
             reset_memory: Whether to reset the memory state
             
         Returns:
-            Combined action outputs [batch_size, action_dim]
+            Tuple of combined (actions, alpha) where:
+            - actions: Combined action outputs [batch_size, action_dim]
+            - alpha: Combined alpha values [batch_size, 1]
         """
-        # Get actions from each policy
-        policy_actions = [policy(x, reset_memory) for policy in self.policies]
+        # Get actions and alpha from each policy
+        policy_outputs = [policy(x, reset_memory) for policy in self.policies]
         
-        # Stack actions for combining [num_policies, batch_size, action_dim]
+        # Separate actions and alphas
+        policy_actions = [output[0] for output in policy_outputs]
+        policy_alphas = [output[1] for output in policy_outputs]
+        
+        # Stack for combining [num_policies, batch_size, action_dim/1]
         stacked_actions = torch.stack(policy_actions)
+        stacked_alphas = torch.stack(policy_alphas)
         
-        # Combine actions based on ensemble method
+        # Combine actions and alphas based on ensemble method
         if self.ensemble_method == 'mean':
             # Simple average
             actions = torch.mean(stacked_actions, dim=0)
+            alpha = torch.mean(stacked_alphas, dim=0)
         elif self.ensemble_method == 'weighted':
             # Weighted average
             weights = F.softmax(self.weights, dim=0)
             actions = torch.sum(stacked_actions * weights.view(-1, 1, 1), dim=0)
+            alpha = torch.sum(stacked_alphas * weights.view(-1, 1, 1), dim=0)
         else:
             # Default to mean
             actions = torch.mean(stacked_actions, dim=0)
+            alpha = torch.mean(stacked_alphas, dim=0)
         
-        return actions
+        return actions, alpha
     
     def reset(self) -> None:
         """Reset all policies in the ensemble."""

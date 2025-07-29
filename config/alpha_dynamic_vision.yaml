@@ -1,0 +1,86 @@
+# Configuration file for Dynamic Alpha Vision-Driven Multi-Agent Navigation
+# This configuration combines our novel "Adaptive Safety Margin" mechanism with vision-based observations
+
+# Experiment name
+run_name: "GCBF+_Dynamic_Alpha_Vision"
+
+# Environment parameters
+env:
+  num_agents: 4                   # Reduced for vision complexity
+  area_size: 2.0                  # Larger area for better visual diversity
+  car_radius: 0.08                # Slightly larger agents for better visibility
+  comm_radius: 0.8                # Adjusted for larger area
+  mass: 0.1                       # Mass of each agent
+  dt: 0.03                        # Simulation timestep
+  cbf_alpha: 1.0                  # Default CBF alpha (will be overridden by dynamic prediction)
+  
+  # Vision configuration
+  vision:
+    enabled: true                 # Enable vision-based observations
+    image_size: 64                # Square depth images (64x64)
+    camera_fov: 90.0              # Wide field of view for navigation
+    camera_range: 3.0             # Maximum depth range
+    agent_color: [0.2, 0.6, 1.0]  # Blue for other agents
+    obstacle_color: [1.0, 0.2, 0.2]  # Red for obstacles
+
+# Networks parameters
+networks:
+  # Policy CRNN parameters
+  policy:
+    # Perception module configuration
+    perception:
+      vision_enabled: true
+      input_channels: 1             # Depth images (grayscale)
+      conv_channels: [32, 64, 128]  # CNN channel progression
+      kernel_sizes: [5, 3, 3]       # Kernel sizes for each conv layer
+      image_size: 64                # Must match env.vision.image_size
+      hidden_dim: 128               # Larger hidden dim for vision complexity
+      activation: 'relu'
+    
+    # Memory module configuration
+    memory:
+      hidden_dim: 128               # Must match perception hidden_dim
+      num_layers: 1                 # GRU layers
+    
+    # Policy head configuration
+    policy_head:
+      output_dim: 2                 # Action dimensions (fx, fy)
+      hidden_dims: [128]            # Hidden layers for policy head
+    
+  # CBF Network parameters (still uses extracted features)
+  cbf:
+    input_dim: 128                # Matches policy hidden_dim
+    hidden_dim: 128               # CBF hidden dimension
+    n_layers: 3                   # Deeper network for vision-based safety
+
+# Training parameters
+training:
+  training_steps: 5000            # Fewer steps for initial validation
+  horizon_length: 30              # Shorter horizon for vision complexity
+  eval_horizon: 50                # Evaluation horizon length
+  eval_interval: 200              # Less frequent evaluation
+  save_interval: 1000             # Model save interval
+  learning_rate: 0.0005           # Lower learning rate for vision
+  max_grad_norm: 1.0              # Gradient clipping norm
+  
+  # Learning rate scheduler
+  use_lr_scheduler: true          # Enable learning rate scheduling
+  lr_step_size: 1000              # Step size for scheduler
+  lr_gamma: 0.8                   # LR decay factor
+  
+  # Gradient decay for temporal stability
+  gradient_decay_rate: 0.95       # Rate at which gradients decay through time
+
+  # Loss weights (adjusted for vision-based learning)
+  goal_weight: 1.0                # Weight for goal reaching loss
+  safety_weight: 5.0              # Reduced safety weight (vision provides implicit safety awareness)
+  control_weight: 0.1             # Weight for control effort loss
+  jerk_weight: 0.05               # Weight for jerk penalty (rate of change of action)
+  alpha_reg_weight: 0.005         # Lower alpha regularization for vision (let network learn adaptive margins)
+  cbf_alpha: 1.0                  # Fallback alpha parameter
+
+# Evaluation parameters
+eval:
+  num_episodes: 10                # Evaluation episodes
+  render_episodes: 2              # Episodes to render during evaluation
+  save_videos: true               # Save evaluation videos 

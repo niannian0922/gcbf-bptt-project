@@ -27,3 +27,7 @@ jaxproxqp @ git+https://github.com/oswinso/jaxproxqp.git
 torch>=2.0.0
 torchvision>=0.15.0
 ffmpeg-python>=0.2.0
+
+# Requirements for vision-driven navigation
+pytorch3d>=0.7.4
+pillow>=9.0.0

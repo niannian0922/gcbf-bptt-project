@@ -46,7 +46,11 @@ training:
   max_grad_norm: 1.0             # Gradient clipping norm
   cbf_alpha: 1.0                 # Alpha parameter for CBF condition
   
+  # Gradient decay for temporal stability
+  gradient_decay_rate: 0.9       # Rate at which gradients decay through time (more aggressive for short verification)
+  
   # Loss weights
   goal_weight: 1.0               # Weight for goal reaching reward
   safety_weight: 10.0            # Weight for safety violations
-  control_weight: 0.1            # Weight for control effort 
+  control_weight: 0.1            # Weight for control effort
+  alpha_reg_weight: 0.02         # Weight for alpha regularization (slightly higher for verification) 

@@ -79,8 +79,8 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
                 h_vals = cbf_network(observations)
                 all_cbf_values.append(h_vals.cpu().numpy())
             
-            # Get actions from policy network
-            actions = policy_network(observations)
+            # Get actions and alpha from policy network
+            actions, alpha = policy_network(observations)
             all_actions.append(actions.clone())
             
             # Calculate metrics before stepping
@@ -100,8 +100,8 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
             control_efforts.append(control_effort)
             total_control_effort += control_effort
             
-            # Step simulation
-            step_result = env.step(state, actions)
+            # Step simulation with dynamic alpha
+            step_result = env.step(state, actions, alpha)
             next_state = step_result.next_state
             
             # 3. Path length calculation
@@ -338,27 +338,43 @@ def main():
     env = env.to(device)
     
     # Create policy network
-    # Prepare policy configuration
-    policy_config = {
-        'type': 'bptt',
-        'perception': {
-            'input_dim': env.observation_shape[-1],
-            'hidden_dim': config['networks']['policy']['hidden_dim'],
-            'num_layers': config['networks']['policy']['n_layers'],
-            'activation': 'relu',
-            'use_batch_norm': False
-        },
-        'memory': {
-            'hidden_dim': config['networks']['policy']['hidden_dim'],
-            'num_layers': 1
-        },
-        'policy_head': {
-            'output_dim': env.action_shape[-1],
-            'hidden_dims': [config['networks']['policy']['hidden_dim']],
-            'action_scaling': True,
-            'action_bound': 1.0
+    # Use the policy configuration from YAML file
+    policy_network_config = config.get('networks', {}).get('policy', {})
+    
+    if policy_network_config and ('perception' in policy_network_config or 'memory' in policy_network_config):
+        # Use configuration from YAML file (supports vision and other advanced features)
+        policy_config = policy_network_config.copy()
+        policy_config['type'] = 'bptt'
+        
+        # Ensure policy_head has correct output dimension
+        if 'policy_head' not in policy_config:
+            policy_config['policy_head'] = {}
+        policy_config['policy_head']['output_dim'] = env.action_shape[-1]
+    else:
+        # Fallback: create default configuration
+        hidden_dim = policy_network_config.get('hidden_dim', 64)
+        n_layers = policy_network_config.get('n_layers', 2)
+        
+        policy_config = {
+            'type': 'bptt',
+            'perception': {
+                'input_dim': env.observation_shape[-1],
+                'hidden_dim': hidden_dim,
+                'num_layers': n_layers,
+                'activation': 'relu',
+                'use_batch_norm': False
+            },
+            'memory': {
+                'hidden_dim': hidden_dim,
+                'num_layers': 1
+            },
+            'policy_head': {
+                'output_dim': env.action_shape[-1],
+                'hidden_dims': [hidden_dim],
+                'action_scaling': True,
+                'action_bound': 1.0
+            }
         }
-    }
     
     # Create policy network
     policy_network = create_policy_from_config(policy_config)

@@ -5,7 +5,10 @@ from typing import Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 
 from .multi_agent_env import MultiAgentEnv, MultiAgentState, StepResult
-from ..utils.autograd import g_decay
+from ..utils.autograd import g_decay, apply_temporal_decay
+
+# Vision-related imports
+from .vision_renderer import SimpleDepthRenderer, create_simple_renderer
 
 
 @dataclass
@@ -45,6 +48,7 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         # Store additional parameters
         self.mass = config.get('mass', 0.1)
         self.max_force = config.get('max_force', 1.0)
+        self.cbf_alpha = config.get('cbf_alpha', 1.0)  # Default CBF alpha parameter
         self.pos_dim = 2  # 2D positions (x, y)
         self.vel_dim = 2  # 2D velocities (vx, vy)
         self.state_dim = 4  # x, y, vx, vy
@@ -55,6 +59,21 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         self.gradient_decay_rate = training_config.get('gradient_decay_rate', 0.95)
         self.use_gradient_decay = self.gradient_decay_rate > 0.0
         self.training = True  # Default to training mode
+        
+        # Vision-based observation parameters
+        vision_config = config.get('vision', {})
+        self.use_vision = vision_config.get('enabled', False)
+        
+        # Initialize renderer if vision is enabled
+        if self.use_vision:
+            renderer_config = {
+                'image_size': vision_config.get('image_size', 64),
+                'camera_fov': vision_config.get('camera_fov', 90.0),
+                'camera_range': vision_config.get('camera_range', 3.0),
+                'agent_radius': self.agent_radius,
+                'obstacle_base_height': 0.5
+            }
+            self.depth_renderer = create_simple_renderer(renderer_config)
         
         # Register the state transition matrices as buffers
         # State transition: x_{t+1} = A * x_t + B * u_t
@@ -74,13 +93,18 @@ class DoubleIntegratorEnv(MultiAgentEnv):
 
     @property
     def observation_shape(self) -> Tuple[int, ...]:
-        """Get observation shape: [n_agents, obs_dim]"""
-        # state + goal position + obstacle info (if obstacles are enabled)
-        if self.obstacles_config is not None:
-            # Include position (2) and radius (1) of closest obstacle
-            return (self.num_agents, self.state_dim + self.pos_dim + self.pos_dim + 1)
+        """Get observation shape: [n_agents, obs_dim] or [n_agents, channels, height, width] for vision"""
+        if self.use_vision:
+            # Vision-based: depth images
+            image_size = self.depth_renderer.image_size
+            return (self.num_agents, 1, image_size, image_size)  # Depth images
         else:
-            return (self.num_agents, self.state_dim + self.pos_dim)  # state + goal position
+            # State-based observations
+            if self.obstacles_config is not None:
+                # Include position (2) and radius (1) of closest obstacle
+                return (self.num_agents, self.state_dim + self.pos_dim + self.pos_dim + 1)
+            else:
+                return (self.num_agents, self.state_dim + self.pos_dim)  # state + goal position
 
     @property
     def action_shape(self) -> Tuple[int, ...]:
@@ -92,6 +116,44 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         lower_bound = -self.max_force * torch.ones(self.action_shape, device=self.device)
         upper_bound = self.max_force * torch.ones(self.action_shape, device=self.device)
         return lower_bound, upper_bound
+    
+    def render_depth_image(self, state: DoubleIntegratorState, agent_idx: int) -> torch.Tensor:
+        """
+        Render a depth image from the perspective of a specific agent using the simplified renderer.
+        
+        Args:
+            state: Current environment state
+            agent_idx: Index of the agent whose perspective to render from
+            
+        Returns:
+            Depth image tensor [1, H, W] with values in [0, 1]
+        """
+        if not self.use_vision:
+            raise RuntimeError("Vision rendering is not enabled")
+        
+        # Get agent position and goal
+        agent_pos = state.positions[0, agent_idx]  # [2]
+        goal_pos = state.goals[0, agent_idx]       # [2]
+        
+        # Get other agent positions (excluding the viewing agent)
+        all_agent_positions = state.positions[0]  # [num_agents, 2]
+        other_agents = torch.cat([
+            all_agent_positions[:agent_idx],
+            all_agent_positions[agent_idx+1:]
+        ], dim=0) if len(all_agent_positions) > 1 else torch.empty(0, 2, device=agent_pos.device)
+        
+        # Render depth image using the simplified renderer
+        depth_image = self.depth_renderer.render_depth_from_position(
+            agent_pos=agent_pos,
+            goal_pos=goal_pos,
+            other_agents=other_agents,
+            obstacles=state.obstacles[0] if state.obstacles is not None else None
+        )
+        
+        # Add some realism with noise (optional)
+        depth_image = self.depth_renderer.add_noise_and_realism(depth_image, noise_level=0.01)
+        
+        return depth_image  # [1, H, W]
     
     def reset(self, batch_size: int = 1, randomize: bool = True) -> DoubleIntegratorState:
         """
@@ -219,13 +281,14 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         
         return state
     
-    def step(self, state: DoubleIntegratorState, action: torch.Tensor) -> StepResult:
+    def step(self, state: DoubleIntegratorState, action: torch.Tensor, alpha: Optional[torch.Tensor] = None) -> StepResult:
         """
-        Take a step in the environment using the given actions.
+        Take a step in the environment using the given actions and dynamic alpha values.
         
         Args:
             state: Current state
             action: Actions to take [batch_size, n_agents, action_dim]
+            alpha: Dynamic CBF alpha values [batch_size, n_agents, 1] (optional)
             
         Returns:
             StepResult containing next_state, reward, cost, done, info
@@ -233,8 +296,12 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         # Ensure action is on the correct device first
         action = action.to(self.device)
         
-        # Apply safety layer if it exists (default implementation just returns the action)
-        safe_action = self.apply_safety_layer(state, action)
+        # Ensure alpha is on the correct device if provided
+        if alpha is not None:
+            alpha = alpha.to(self.device)
+        
+        # Apply safety layer with dynamic alpha if it exists
+        safe_action = self.apply_safety_layer(state, action, alpha)
         
         # Ensure safe_action is also on the correct device
         safe_action = safe_action.to(self.device)
@@ -248,11 +315,15 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         # Compute state derivatives using dynamics
         derivatives = self.dynamics(state, safe_action)
         
-        # Update positions and velocities using Euler integration with gradient decay
+        # Update positions and velocities using Euler integration with temporal gradient decay
         if self.use_gradient_decay and self.training:
-            # Apply gradient decay to stabilize training
-            positions_decayed = g_decay(state.positions, self.gradient_decay_rate)
-            velocities_decayed = g_decay(state.velocities, self.gradient_decay_rate)
+            # Apply temporal gradient decay to stabilize long-horizon BPTT training
+            positions_decayed = apply_temporal_decay(
+                state.positions, self.gradient_decay_rate, self.dt, self.training
+            )
+            velocities_decayed = apply_temporal_decay(
+                state.velocities, self.gradient_decay_rate, self.dt, self.training
+            )
             
             new_positions = positions_decayed + velocities_decayed * self.dt
             new_velocities = velocities_decayed + (safe_action / self.mass) * self.dt
@@ -281,7 +352,8 @@ class DoubleIntegratorEnv(MultiAgentEnv):
             'goal_distance': self.get_goal_distance(next_state),
             'collision': self.check_collision(next_state),
             'action': safe_action,
-            'raw_action': action
+            'raw_action': action,
+            'alpha': alpha if alpha is not None else torch.ones_like(action[..., :1]) * self.cbf_alpha  # Default alpha
         }
         
         return StepResult(next_state, reward, cost, done, info)
@@ -290,58 +362,82 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         """
         Extract observation from environment state.
         
-        For the double integrator, the observation includes:
-        - Agent position (x, y)
-        - Agent velocity (vx, vy)
-        - Goal position (gx, gy)
+        Returns either state-based or vision-based observations depending on configuration.
+        
+        State-based observations include:
+        - Agent position (x, y), velocity (vx, vy), goal position (gx, gy)
         - Obstacle information (if present)
+        
+        Vision-based observations include:
+        - Depth image from each agent's perspective [n_agents, 1, H, W]
         
         Args:
             state: Current environment state
             
         Returns:
-            Observation tensor [batch_size, n_agents, obs_dim]
+            Observation tensor: 
+            - State-based: [batch_size, n_agents, obs_dim]
+            - Vision-based: [batch_size, n_agents, 1, H, W]
         """
         batch_size = state.batch_size
+        device = state.positions.device
         
-        # First combine position, velocity and goal information
-        base_obs = torch.cat([
-            state.positions,                              # positions
-            state.velocities,                             # velocities
-            state.goals                                   # goals
-        ], dim=2)
+        if self.use_vision:
+            # Vision-based observations: render depth images for each agent
+            vision_obs = []
+            
+            for agent_idx in range(self.num_agents):
+                depth_image = self.render_depth_image(state, agent_idx)  # [1, H, W]
+                vision_obs.append(depth_image)
+            
+            # Stack depth images for all agents
+            stacked_obs = torch.stack(vision_obs, dim=0)  # [n_agents, 1, H, W]
+            
+            # Add batch dimension
+            observation = stacked_obs.unsqueeze(0)  # [1, n_agents, 1, H, W]
+            
+            return observation
         
-        # If we have obstacles, include information about closest obstacle to each agent
-        if state.obstacles is not None:
-            # Extract obstacle positions and radii
-            obstacle_positions = state.obstacles[..., :-1]  # [batch_size, n_obstacles, pos_dim]
-            obstacle_radii = state.obstacles[..., -1:]     # [batch_size, n_obstacles, 1]
-            
-            # For each agent, find the closest obstacle and include it in observation
-            closest_obstacles = torch.zeros(batch_size, self.num_agents, self.pos_dim + 1, device=state.positions.device)
-            
-            for b in range(batch_size):
-                for i in range(self.num_agents):
-                    # Compute distances to all obstacles
-                    agent_pos = state.positions[b, i].unsqueeze(0)  # [1, pos_dim]
-                    dists = torch.norm(agent_pos - obstacle_positions[b], dim=1)
-                    
-                    # Find the closest obstacle
-                    closest_idx = torch.argmin(dists)
-                    
-                    # Store position and radius of closest obstacle relative to agent
-                    closest_pos = obstacle_positions[b, closest_idx] - state.positions[b, i]
-                    closest_rad = obstacle_radii[b, closest_idx]
-                    
-                    closest_obstacles[b, i, :self.pos_dim] = closest_pos
-                    closest_obstacles[b, i, self.pos_dim] = closest_rad
-            
-            # Combine with base observation
-            observation = torch.cat([base_obs, closest_obstacles], dim=2)
         else:
-            observation = base_obs
-        
-        return observation
+            # State-based observations (original implementation)
+            # First combine position, velocity and goal information
+            base_obs = torch.cat([
+                state.positions,                              # positions
+                state.velocities,                             # velocities
+                state.goals                                   # goals
+            ], dim=2)
+            
+            # If we have obstacles, include information about closest obstacle to each agent
+            if state.obstacles is not None:
+                # Extract obstacle positions and radii
+                obstacle_positions = state.obstacles[..., :-1]  # [batch_size, n_obstacles, pos_dim]
+                obstacle_radii = state.obstacles[..., -1:]     # [batch_size, n_obstacles, 1]
+                
+                # For each agent, find the closest obstacle and include it in observation
+                closest_obstacles = torch.zeros(batch_size, self.num_agents, self.pos_dim + 1, device=device)
+                
+                for b in range(batch_size):
+                    for i in range(self.num_agents):
+                        # Compute distances to all obstacles
+                        agent_pos = state.positions[b, i].unsqueeze(0)  # [1, pos_dim]
+                        dists = torch.norm(agent_pos - obstacle_positions[b], dim=1)
+                        
+                        # Find the closest obstacle
+                        closest_idx = torch.argmin(dists)
+                        
+                        # Store position and radius of closest obstacle relative to agent
+                        closest_pos = obstacle_positions[b, closest_idx] - state.positions[b, i]
+                        closest_rad = obstacle_radii[b, closest_idx]
+                        
+                        closest_obstacles[b, i, :self.pos_dim] = closest_pos
+                        closest_obstacles[b, i, self.pos_dim] = closest_rad
+                
+                # Combine with base observation
+                observation = torch.cat([base_obs, closest_obstacles], dim=2)
+            else:
+                observation = base_obs
+            
+            return observation
     
     def render(self, state: DoubleIntegratorState) -> Any:
         """
@@ -397,20 +493,27 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         
         return fig
     
-    def apply_safety_layer(self, state: DoubleIntegratorState, raw_action: torch.Tensor) -> torch.Tensor:
+    def apply_safety_layer(self, state: DoubleIntegratorState, raw_action: torch.Tensor, alpha: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Apply safety constraints to raw actions.
+        Apply safety constraints to raw actions using dynamic alpha values.
         This method can be overridden to implement GCBF safety filtering.
         
         Args:
             state: Current environment state
             raw_action: Raw action from policy [batch_size, n_agents, action_dim]
+            alpha: Dynamic CBF alpha values [batch_size, n_agents, 1] (optional)
             
         Returns:
             Safe action [batch_size, n_agents, action_dim]
         """
         # Default implementation: just return the raw action
-        # In a subclass, this would be replaced with GCBF safety filtering
+        # In a subclass, this would be replaced with GCBF safety filtering using dynamic alpha
+        # For now, we store the alpha values in the info for potential future use
+        if alpha is not None:
+            # Store alpha values for potential use by safety layers or logging
+            if not hasattr(self, '_current_alpha'):
+                self._current_alpha = alpha
+        
         return raw_action
 
     def dynamics(self, state: DoubleIntegratorState, action: torch.Tensor) -> torch.Tensor:
