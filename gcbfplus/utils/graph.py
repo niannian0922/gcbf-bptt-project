@@ -46,17 +46,17 @@ class EdgeBlock(NamedTuple):
 
 @jtu.register_pytree_with_keys_class
 class GraphsTuple(tuple, Generic[_State, _EnvState]):
-    n_node: Int[Array, "n_graph"]  # number of nodes in each subgraph
-    n_edge: Int[Array, "n_graph"]  # number of edges in each subgraph
+    n_node: Int[Array, "n_graph"]  # 每个子图中的节点数量
+    n_edge: Int[Array, "n_graph"]  # 每个子图中的边数量
 
-    nodes: Float[Array, "sum_n_node ..."]  # node features
-    edges: Float[Array, "sum_n_edge ..."]  # edge features
-    states: _State  # node state features
+    nodes: Float[Array, "sum_n_node ..."]  # 节点特征
+    edges: Float[Array, "sum_n_edge ..."]  # 边特征
+    states: _State  # 节点状态特征
     receivers: Int[Array, "sum_n_edge"]
     senders: Int[Array, "sum_n_edge"]
-    node_type: Int[Array, "sum_n_node"]  # by default, 0 is agent, -1 is padding
-    env_states: _EnvState  # environment state features
-    connectivity: Int[Array, "sum_n_node sum_n_node"] = None  # desired connectivity matrix
+    node_type: Int[Array, "sum_n_node"]  # 默认情况下，0是智能体，-1是填充
+    env_states: _EnvState  # 环境状态特征
+    connectivity: Int[Array, "sum_n_node sum_n_node"] = None  # 期望的连接矩阵
 
     def __new__(
         cls,
@@ -187,12 +187,12 @@ class GraphsTuple(tuple, Generic[_State, _EnvState]):
 
 
 class GetGraph(NamedTuple):
-    nodes: Float[Array, "n_nodes n_node_feat"]  # node features
-    node_type: Int[Array, "n_nodes"]  # by default, 0 is agent
+    nodes: Float[Array, "n_nodes n_node_feat"]  # 节点特征
+    node_type: Int[Array, "n_nodes"]  # 默认情况下，0是智能体
     edge_blocks: list[EdgeBlock]
     env_states: Any
-    states: Float[Array, "n_nodes n_state"]  # node state features
-    connectivity: Int[Array, "n_node n_node"] = None  # desired connectivity matrix
+    states: Float[Array, "n_nodes n_state"]  # 节点状态特征
+    connectivity: Int[Array, "n_node n_node"] = None  # 期望的连接矩阵
 
     @property
     def n_nodes(self):
@@ -207,14 +207,14 @@ class GetGraph(NamedTuple):
         return self.states.shape[1]
 
     def to_padded(self) -> GraphsTuple:
-        # make a dummy node for creating fake self edges.
+        # 创建一个虚拟节点以生成假的自环边
         node_feat_dummy = jnp.zeros(self.node_dim)
         node_feats_pad = jnp.concatenate([self.nodes, node_feat_dummy[None]], axis=0)
         node_type_pad = jnp.concatenate([self.node_type, jnp.full(1, -1)], axis=0)
         state_dummy = jnp.ones(self.state_dim) * -1
         state_pad = jnp.concatenate([self.states, state_dummy[None]], axis=0)
 
-        # Construct edge list.
+        # 构建边列表
         pad_id = self.n_nodes
         edge_feats_lst, recv_list, send_list = [], [], []
         for edge_block in self.edge_blocks:

@@ -1,39 +1,36 @@
 from flax import core, struct
-from jaxtyping import Array, Bool, Float, Int, Shaped
-from typing import Dict, TypeVar, Any, List
-from numpy import ndarray
+from jaxtyping import Float, Int
+from typing import Any
+import jax.numpy as jnp
 
+# jax类型
+Array = jnp.ndarray
+Action = Float[Array, "batch action_dim"]
+Obs = Float[Array, "batch obs_dim"]
+State = Float[Array, "batch state_dim"]
 
-# jax types
-PRNGKey = Float[Array, '2']
+# 环境类型
+Pos = Float[Array, "2"]
+Vel = Float[Array, "2"]
 
-BoolScalar = Bool[Array, ""]
-ABool = Bool[Array, "num_agents"]
+Pos2d = Float[Array, "2"]
+Pos3d = Float[Array, "3"]
 
-# environment types
-Action = Float[Array, 'num_agents action_dim']
-Reward = Float[Array, '']
-Cost = Float[Array, '']
-Done = BoolScalar
-Info = Dict[str, Shaped[Array, '']]
-EdgeIndex = Float[Array, '2 n_edge']
-AgentState = Float[Array, 'num_agents agent_state_dim']
-State = Float[Array, 'num_states state_dim']
-Node = Float[Array, 'num_nodes node_dim']
-EdgeAttr = Float[Array, 'num_edges edge_dim']
-Pos2d = Float[Array, '2'] | Float[ndarray, '2']
-Pos3d = Float[Array, '3'] | Float[ndarray, '3']
-Pos = Pos2d | Pos3d
-Radius = Float[Array, ''] | float
+Vector2d = Float[Array, "2"]
+Vector3d = Float[Array, "3"]
 
+# 批处理位置和速度
+BatchPos = Float[Array, "batch 2"]
+BatchVel = Float[Array, "batch 2"]
+BatchPos2d = Float[Array, "batch 2"]
+BatchPos3d = Float[Array, "batch 3"]
 
-# neural network types
-Params = TypeVar("Params", bound=core.FrozenDict[str, Any])
+BatchVector2d = Float[Array, "batch 2"]
+BatchVector3d = Float[Array, "batch 3"]
 
-# obstacles
-ObsType = Int[Array, '']
-ObsWidth = Float[Array, '']
-ObsHeight = Float[Array, '']
-ObsLength = Float[Array, '']
-ObsTheta = Float[Array, '']
-ObsQuaternion = Float[Array, '4']
+# 神经网络类型
+PolicyParams = Any
+CBFParams = Any
+
+# 障碍物
+Obstacle = Float[Array, "n_obs obstacle_dim"]

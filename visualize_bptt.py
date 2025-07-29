@@ -9,6 +9,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import matplotlib.patches as patches
+import torch.nn as nn
 
 from gcbfplus.env import DoubleIntegratorEnv, CrazyFlieEnv
 from gcbfplus.policy import BPTTPolicy, create_policy_from_config
@@ -27,492 +28,557 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
         config: Configuration dictionary
         save_path: Path to save the animation
     """
-    # Set networks to evaluation mode
+    # 将网络设置为评估模式
     policy_network.eval()
-    if cbf_network is not None:
+    if cbf_network:
         cbf_network.eval()
     
-    # Initialize environment
-    state = env.reset(batch_size=1, randomize=True)
+    # 初始化环境
+    state = env.reset()
     
-    # Parameters for visualization
-    num_agents = env.num_agents
-    area_size = env.area_size
-    car_radius = env.agent_radius
-    horizon = config.get('eval_horizon', 100)
+    # 可视化参数
+    simulation_steps = config.get('simulation_steps', 200)
+    time_step = config.get('time_step', 0.05)
+    max_agents_to_visualize = config.get('max_agents_to_visualize', None)
     
-    # Initialize bottleneck analyzer if enabled
+    # 如果启用，初始化瓶颈分析器
     bottleneck_analyzer = None
     if config.get('bottleneck_metrics', {}).get('enabled', False):
-        bottleneck_analyzer = BottleneckAnalyzer(config)
-        bottleneck_analyzer.reset()
+        bottleneck_analyzer = BottleneckAnalyzer(config['bottleneck_metrics'])
     
-    # Initialize metrics tracking
-    time_to_goal = 0
-    total_path_length = 0
-    min_separation_distance = float('inf')
-    total_control_effort = 0
-    goal_reached = False
-    collision_detected = False
-    
-    # For path length calculation
-    prev_positions = state.positions.clone()
-    
-    # Store per-step metrics
+    # 初始化指标跟踪
     min_distances = []
+    cbf_values_history = []
     control_efforts = []
+    path_lengths = []
+    alphas_history = []
     
-    # Store all states for visualization
-    all_positions = [state.positions.clone().cpu().numpy()]
-    all_cbf_values = []
+    # 用于路径长度计算
+    previous_positions = state.positions.clone()
+    cumulative_path_lengths = torch.zeros(state.positions.shape[0], state.positions.shape[1])
+    
+    # 存储每步指标
+    episode_rewards = []
+    episode_costs = []
+    episode_dones = []
+    
+    # 存储所有状态用于可视化
+    all_positions = []
+    all_goals = []
     all_actions = []
     
-    # Extract obstacle information if available
-    has_obstacles = state.obstacles is not None
-    if has_obstacles:
-        obstacles = state.obstacles[0].cpu().numpy()  # Shape [n_obstacles, pos_dim+1]
-    else:
-        obstacles = None
+    # 如果可用，提取障碍物信息
+    obstacles = None
+    if hasattr(state, 'obstacles') and state.obstacles is not None:
+        obstacles = state.obstacles[0].cpu().numpy()  # 形状 [n_obstacles, pos_dim+1]
+    elif hasattr(env, 'obstacles') and env.obstacles is not None:
+        obstacles = env.obstacles
+    elif config.get('env', {}).get('obstacles', {}).get('bottleneck', False):
+        # 基于配置生成瓶颈障碍物
+        obstacles = []
     
+    # 从状态获取观测
+    observations = env.get_observations(state)
+    
+    # 将观测移动到设备以进行网络处理
+    observations = observations.to(device)
+    
+    # 如果CBF网络可用，获取CBF值
+    if cbf_network:
+        cbf_values = cbf_network(observations.view(observations.shape[0], -1))
+        cbf_values_history.append(cbf_values.cpu().numpy())
+    
+    # 从策略网络获取动作和alpha
     with torch.no_grad():
-        for t in range(horizon):
-            # Get observations from state
-            observations = env.get_observation(state)
-            
-            # Move observations to device for network processing
-            observations = observations.to(device)
-            
-            # Get CBF values if CBF network is available
-            if cbf_network is not None:
-                h_vals = cbf_network(observations)
-                all_cbf_values.append(h_vals.cpu().numpy())
-            
-            # Get actions and alpha from policy network
-            actions, alpha = policy_network(observations)
-            all_actions.append(actions.clone())
-            
-            # Calculate metrics before stepping
-            
-            # 1. Minimum inter-agent distance
-            positions = state.positions[0]  # [num_agents, 2]
-            min_distance = float('inf')
-            for i in range(num_agents):
-                for j in range(i + 1, num_agents):
-                    dist = torch.norm(positions[i] - positions[j]).item()
-                    min_distance = min(min_distance, dist)
-            min_distances.append(min_distance)
-            min_separation_distance = min(min_separation_distance, min_distance)
-            
-            # 2. Control effort
-            control_effort = torch.sum(actions ** 2).item()
-            control_efforts.append(control_effort)
-            total_control_effort += control_effort
-            
-            # Step simulation with dynamic alpha
-            step_result = env.step(state, actions, alpha)
-            next_state = step_result.next_state
-            
-            # 3. Path length calculation
-            delta_positions = next_state.positions - prev_positions
-            step_path_length = torch.sum(torch.norm(delta_positions, dim=2)).item()
-            total_path_length += step_path_length
-            prev_positions = next_state.positions.clone()
-            
-            # Store positions for visualization
-            all_positions.append(next_state.positions.clone().cpu().numpy())
-            
-            # Update bottleneck analyzer if enabled
-            if bottleneck_analyzer is not None:
-                bottleneck_analyzer.update(
-                    positions=next_state.positions,
-                    velocities=next_state.velocities,
-                    goals=next_state.goals,
-                    time_step=t
-                )
-            
-            # Check if all agents reached their goals
-            distances = env.get_goal_distance(next_state)
-            if torch.all(distances < 2 * car_radius) and not goal_reached:
-                time_to_goal = t + 1
-                goal_reached = True
-                print(f"All agents reached their goals at step {time_to_goal}")
-                
-            # Check for collisions
-            if torch.any(step_result.cost > 0) and not collision_detected:
-                print(f"Collision detected at step {t+1}")
-                collision_detected = True
-            
-            # Update state
-            state = next_state
-            
-            # Early termination if all goals reached and we're past the time to goal
-            if goal_reached and t >= time_to_goal + 5:
-                break
+        actions, alpha = policy_network(observations)
     
-    # If goals were never reached, record the maximum time
-    if not goal_reached:
-        time_to_goal = len(all_positions) - 1
-    
-    # Convert lists to numpy arrays
+    # 运行仿真并计算指标
+    for step in range(simulation_steps):
+        # 在步进前计算指标
+        
+        # 1. 最小智能体间距离
+        positions = state.positions[0]  # [num_agents, 2]
+        dists = torch.cdist(positions, positions)
+        # 将对角线设置为大值以忽略自距离
+        dists.fill_diagonal_(float('inf'))
+        min_dist = torch.min(dists).item()
+        min_distances.append(min_dist)
+        
+        # 2. 控制努力
+        control_effort = torch.norm(actions, dim=-1).mean().item()
+        control_efforts.append(control_effort)
+        
+        # 使用动态alpha进行仿真步进
+        step_result = env.step(state, actions, alpha)
+        
+        # 3. 路径长度计算
+        current_positions = step_result.next_state.positions
+        step_distances = torch.norm(current_positions - previous_positions, dim=-1)
+        cumulative_path_lengths += step_distances.cpu()
+        previous_positions = current_positions.clone()
+        
+        # 存储位置用于可视化
+        all_positions.append(current_positions[0].cpu().numpy())
+        
+        # 更新瓶颈分析器（如果启用）
+        if bottleneck_analyzer:
+            step_data = {
+                'positions': current_positions.cpu(),
+                'velocities': step_result.next_state.velocities.cpu(),
+                'actions': actions.cpu(),
+                'alpha': alpha.cpu() if alpha is not None else None,
+                'rewards': step_result.reward.cpu(),
+                'costs': step_result.cost.cpu()
+            }
+            bottleneck_analyzer.update(step_data)
+        
+        # 检查是否所有智能体都到达了目标
+        if hasattr(step_result.next_state, 'goals'):
+            all_goals.append(step_result.next_state.goals[0].cpu().numpy())
+        else:
+            all_goals.append(np.zeros_like(all_positions[-1]))  # 占位符
+        
+        # 检查碰撞
+        if hasattr(step_result, 'info') and 'collisions' in step_result.info:
+            collision_occurred = step_result.info['collisions']
+        else:
+            collision_occurred = step_result.cost[0].max() > 0
+        
+        # 更新状态
+        state = step_result.next_state
+        
+        # 提前终止，如果达到所有目标并且我们已过了到目标的时间
+        if hasattr(env, 'all_goals_reached') and env.all_goals_reached(state):
+            break
+        
+        # 如果从未达到目标，记录最大时间
+        path_lengths.append(cumulative_path_lengths.cpu().numpy())
+        
+    # 将列表转换为numpy数组
     all_positions = np.array(all_positions)
-    if cbf_network is not None:
-        all_cbf_values = np.array(all_cbf_values)
+    all_goals = np.array(all_goals)
     
-    # Create visualization
+    # 创建可视化
     fig, ax = plt.subplots(figsize=(10, 10))
     
-    # Define agent and goal colors
-    agent_colors = plt.cm.tab10(np.linspace(0, 1, num_agents))
+    # 定义智能体和目标颜色
+    agent_colors = plt.cm.tab10(np.linspace(0, 1, all_positions.shape[1]))
+    goal_colors = agent_colors  # 使用相同颜色进行目标
     
-    # Create agent patches
+    # 创建智能体补丁
     agent_patches = []
-    for i in range(num_agents):
-        agent = patches.Circle((0, 0), radius=car_radius, fc=agent_colors[i], ec='black', alpha=0.7)
-        ax.add_patch(agent)
-        agent_patches.append(agent)
+    for i in range(all_positions.shape[1]):
+        if max_agents_to_visualize is None or i < max_agents_to_visualize:
+            circle = plt.Circle(all_positions[0, i], env.config.get('car_radius', 0.05), 
+                              color=agent_colors[i], alpha=0.8)
+            ax.add_patch(circle)
+            agent_patches.append(circle)
     
-    # Add goal markers
-    goal_markers = []
-    for i in range(num_agents):
-        goal_pos = state.goals[0, i].cpu().numpy()
-        goal = ax.plot(goal_pos[0], goal_pos[1], 'x', markersize=10, color=agent_colors[i])[0]
-        goal_markers.append(goal)
+    # 添加目标标记
+    for i in range(all_goals.shape[1]):
+        if max_agents_to_visualize is None or i < max_agents_to_visualize:
+            ax.plot(all_goals[-1, i, 0], all_goals[-1, i, 1], 'x', 
+                   color=goal_colors[i], markersize=10, markeredgewidth=3)
     
-    # Add trajectory lines
+    # 添加轨迹线
     trajectory_lines = []
-    for i in range(num_agents):
-        line, = ax.plot([], [], '-', linewidth=1, color=agent_colors[i], alpha=0.5)
-        trajectory_lines.append(line)
+    for i in range(all_positions.shape[1]):
+        if max_agents_to_visualize is None or i < max_agents_to_visualize:
+            line, = ax.plot([], [], color=agent_colors[i], alpha=0.5, linewidth=1)
+            trajectory_lines.append(line)
     
-    # Add obstacles if present
-    obstacle_patches = []
-    if has_obstacles:
-        for i in range(obstacles.shape[0]):
-            obs_pos = obstacles[i, :2]
-            obs_radius = obstacles[i, 2]
-            obstacle = patches.Circle(obs_pos, radius=obs_radius, fc='red', ec='darkred', alpha=0.3)
-            ax.add_patch(obstacle)
-            obstacle_patches.append(obstacle)
+    # 如果存在障碍物，添加障碍物
+    if obstacles is not None and len(obstacles) > 0:
+        for obs in obstacles:
+            if len(obs) >= 3:  # [x, y, radius]
+                circle = plt.Circle((obs[0], obs[1]), obs[2], 
+                                  color='red', alpha=0.3)
+                ax.add_patch(circle)
+            elif len(obs) >= 4:  # [x, y, width, height] for rectangle
+                rect = plt.Rectangle((obs[0]-obs[2]/2, obs[1]-obs[3]/2), 
+                                   obs[2], obs[3], color='red', alpha=0.3)
+                ax.add_patch(rect)
     
-    # Set plot limits and labels
-    ax.set_xlim(0, area_size)
-    ax.set_ylim(0, area_size)
+    # 设置绘图限制和标签
+    ax.set_xlim(-0.5, env.config.get('area_size', 1.0) + 0.5)
+    ax.set_ylim(-0.5, env.config.get('area_size', 1.0) + 0.5)
     ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
     
-    # Get CBF alpha value for title if available
-    cbf_alpha = config.get('cbf_alpha', None)
-    if cbf_alpha is not None:
-        title = f'Multi-Agent Navigation with GCBF+BTN (alpha = {cbf_alpha})'
-        if has_obstacles:
-            title += ' with Obstacles'
-        ax.set_title(title, fontsize=14)
-    else:
-        ax.set_title('Multi-Agent Navigation with GCBF+BTN', fontsize=14)
+    # 如果可用，获取可视化标题的CBF alpha值
+    cbf_alpha = env.config.get('cbf_alpha', 'Dynamic')
+    if hasattr(env, 'safety_layer') and hasattr(env.safety_layer, 'alpha'):
+        cbf_alpha = env.safety_layer.alpha
+    elif 'cbf_alpha' in config.get('env', {}):
+        cbf_alpha = config['env']['cbf_alpha']
     
-    ax.set_xlabel('X Position')
-    ax.set_ylabel('Y Position')
+    title_text = f'多智能体导航 (Alpha: {cbf_alpha})'
+    if bottleneck_analyzer:
+        title_text += ' - 瓶颈场景'
+    ax.set_title(title_text, fontsize=14, fontweight='bold')
+    ax.set_xlabel('X位置')
+    ax.set_ylabel('Y位置')
     
-    # Add text elements for information display
-    time_text = ax.text(0.02, 0.98, '', transform=ax.transAxes, ha='left', va='top')
-    metrics_text = ax.text(0.02, 0.92, '', transform=ax.transAxes, ha='left', va='top', fontsize=8)
-    cbf_text = ax.text(0.02, 0.86, '', transform=ax.transAxes, ha='left', va='top')
+    # 添加信息显示的文本元素
+    info_text = ax.text(0.02, 0.98, '', transform=ax.transAxes, 
+                       verticalalignment='top', fontsize=10,
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    metrics_text = ax.text(0.02, 0.85, '', transform=ax.transAxes,
+                          verticalalignment='top', fontsize=9,
+                          bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
     
     def init():
-        """Initialize the animation."""
+        """初始化动画。"""
         for i, patch in enumerate(agent_patches):
             patch.center = all_positions[0, 0, i, 0], all_positions[0, 0, i, 1]
-        
         for line in trajectory_lines:
             line.set_data([], [])
-        
-        time_text.set_text('')
+        info_text.set_text('')
         metrics_text.set_text('')
-        cbf_text.set_text('')
-        
-        return agent_patches + trajectory_lines + [time_text, metrics_text, cbf_text]
+        return agent_patches + trajectory_lines + [info_text, metrics_text]
     
     def animate(frame):
-        """Update the animation for each frame."""
-        # Update agent positions
+        """更新每一帧的动画。"""
+        # 更新智能体位置
         for i, patch in enumerate(agent_patches):
-            patch.center = all_positions[frame, 0, i, 0], all_positions[frame, 0, i, 1]
+            if frame < len(all_positions):
+                patch.center = all_positions[frame, i, 0], all_positions[frame, i, 1]
         
-        # Update trajectory lines
+        # 更新轨迹线
         for i, line in enumerate(trajectory_lines):
-            line.set_data(all_positions[:frame+1, 0, i, 0], all_positions[:frame+1, 0, i, 1])
+            if frame < len(all_positions):
+                line.set_data(all_positions[:frame+1, i, 0], all_positions[:frame+1, i, 1])
         
-        # Update text information
-        time_text.set_text(f'Time step: {frame}')
+        # 更新文本信息
+        info_text.set_text(f'时间步: {frame}\n智能体数量: {all_positions.shape[1]}')
         
-        # Update metrics text if available for this frame
-        if frame > 0 and frame < len(min_distances) + 1:
-            metrics_info = (
-                f"Min Distance: {min_distances[frame-1]:.3f}\n"
-                f"Control Effort: {control_efforts[frame-1]:.3f}"
-            )
+        # 如果此帧有可用指标，更新指标文本
+        if frame < len(min_distances):
+            metrics_info = f'最小距离: {min_distances[frame]:.3f}\n'
+            metrics_info += f'控制努力: {control_efforts[frame]:.3f}'
+            if frame < len(cbf_values_history):
+                avg_cbf = np.mean(cbf_values_history[frame])
+                metrics_info += f'\n平均CBF值: {avg_cbf:.3f}'
             metrics_text.set_text(metrics_info)
         
-        if cbf_network is not None and frame < len(all_cbf_values) + 1:
-            min_cbf = all_cbf_values[frame-1].min() if frame > 0 else 0
-            cbf_text.set_text(f'Min CBF value: {min_cbf:.4f}')
-        
-        return agent_patches + trajectory_lines + [time_text, metrics_text, cbf_text]
+        return agent_patches + trajectory_lines + [info_text, metrics_text]
     
-    # Create animation
-    num_frames = len(all_positions)
-    animation = FuncAnimation(fig, animate, frames=num_frames, init_func=init, 
-                              interval=100, blit=True)
+    # 创建动画
+    anim = FuncAnimation(fig, animate, init_func=init, frames=len(all_positions),
+                        interval=50, blit=True, repeat=True)
     
-    # Save animation if requested
-    if save_path:
+    # 如果请求，保存动画
+    if output_path:
         try:
-            animation.save(save_path, writer='ffmpeg', fps=10, dpi=200)
-        except (ValueError, RuntimeError):
-            # If ffmpeg is not available, use default writer
-            animation.save(save_path, fps=10, dpi=100)
-        print(f"Animation saved to {save_path}")
+            anim.save(output_path, writer='pillow', fps=20)
+            print(f'动画已保存至: {output_path}')
+        except Exception as e:
+            # 如果ffmpeg不可用，使用默认写入器
+            print(f'保存为GIF时出错: {e}')
+            anim.save(output_path, writer='pillow', fps=10)
     
-    # Print quantitative metrics summary
-    print("\n" + "="*40)
-    print("          QUANTITATIVE ANALYSIS          ")
-    print("="*40)
-    print(f"Time to Goal: {time_to_goal} steps")
-    print(f"Total Path Length: {total_path_length:.3f} units")
-    print(f"Minimum Separation Distance: {min_separation_distance:.3f} units")
-    print(f"Total Control Effort: {total_control_effort:.3f}")
-    if collision_detected:
-        print("WARNING: Collisions detected during simulation!")
-    print("="*40)
+    # 打印定量指标摘要
+    print("\n=== 仿真指标摘要 ===")
+    print(f"平均最小距离: {np.mean(min_distances):.4f}")
+    print(f"最小距离的标准差: {np.std(min_distances):.4f}")
+    print(f"平均控制努力: {np.mean(control_efforts):.4f}")
+    if cbf_values_history:
+        avg_cbf_values = [np.mean(cbf_vals) for cbf_vals in cbf_values_history]
+        print(f"平均CBF值: {np.mean(avg_cbf_values):.4f}")
     
-    # Perform bottleneck analysis if enabled
-    bottleneck_results = None
-    if bottleneck_analyzer is not None:
-        bottleneck_results = bottleneck_analyzer.analyze(agent_radius=car_radius)
-        
-        print("\n" + "="*50)
-        print("          BOTTLENECK COORDINATION ANALYSIS          ")
-        print("="*50)
-        print(f"Throughput: {bottleneck_results.throughput:.3f} agents/sec")
-        print(f"Velocity Fluctuation: {bottleneck_results.velocity_fluctuation:.3f}")
-        print(f"Total Waiting Time: {bottleneck_results.total_waiting_time:.2f} sec")
-        print(f"Avg Bottleneck Time: {bottleneck_results.avg_bottleneck_time:.3f} sec")
-        print(f"Coordination Efficiency: {bottleneck_results.coordination_efficiency:.3f}")
-        print(f"Collision Rate: {bottleneck_results.collision_rate:.4f} collisions/agent/sec")
-        print(f"Completion Rate: {bottleneck_results.completion_rate:.3f}")
-        print("="*50)
+    # 计算平均路径长度
+    if path_lengths:
+        final_path_lengths = cumulative_path_lengths.numpy()
+        avg_path_length = np.mean(final_path_lengths)
+        print(f"平均路径长度: {avg_path_length:.4f}")
     
-    plt.close()
+    # 如果启用，执行瓶颈分析
+    bottleneck_metrics = None
+    if bottleneck_analyzer:
+        print("\n=== 瓶颈指标分析 ===")
+        try:
+            bottleneck_metrics = bottleneck_analyzer.analyze()
+            
+            print(f"吞吐量: {bottleneck_metrics.throughput:.4f} 智能体/秒")
+            print(f"速度波动: {bottleneck_metrics.velocity_fluctuation:.4f}")
+            print(f"总等待时间: {bottleneck_metrics.total_waiting_time:.4f} 秒")
+            print(f"协调效率: {bottleneck_metrics.coordination_efficiency:.4f}")
+            print(f"碰撞率: {bottleneck_metrics.collision_rate:.4f}")
+            print(f"完成率: {bottleneck_metrics.completion_rate:.4f}")
+            print(f"平均瓶颈时间: {bottleneck_metrics.avg_bottleneck_time:.4f} 秒")
+            
+        except Exception as e:
+            print(f"瓶颈分析错误: {e}")
+            bottleneck_metrics = None
     
-    # Return both the animation and metrics
+    # 返回动画和指标
     metrics = {
-        'time_to_goal': time_to_goal,
-        'total_path_length': total_path_length,
-        'min_separation_distance': min_separation_distance,
-        'total_control_effort': total_control_effort,
-        'collisions_detected': collision_detected,
-        'has_obstacles': has_obstacles
+        'min_distances': min_distances,
+        'control_efforts': control_efforts,
+        'cbf_values': cbf_values_history,
+        'path_lengths': path_lengths
     }
     
-    # Add bottleneck metrics if available
-    if bottleneck_results is not None:
+    # 如果可用，添加瓶颈指标
+    if bottleneck_metrics:
         metrics.update({
-            'bottleneck_throughput': bottleneck_results.throughput,
-            'bottleneck_velocity_fluctuation': bottleneck_results.velocity_fluctuation,
-            'bottleneck_total_waiting_time': bottleneck_results.total_waiting_time,
-            'bottleneck_avg_bottleneck_time': bottleneck_results.avg_bottleneck_time,
-            'bottleneck_coordination_efficiency': bottleneck_results.coordination_efficiency,
-            'bottleneck_collision_rate': bottleneck_results.collision_rate,
-            'bottleneck_completion_rate': bottleneck_results.completion_rate
+            'bottleneck_throughput': bottleneck_metrics.throughput,
+            'bottleneck_velocity_fluctuation': bottleneck_metrics.velocity_fluctuation,
+            'bottleneck_total_waiting_time': bottleneck_metrics.total_waiting_time,
+            'bottleneck_coordination_efficiency': bottleneck_metrics.coordination_efficiency,
+            'bottleneck_collision_rate': bottleneck_metrics.collision_rate,
+            'bottleneck_completion_rate': bottleneck_metrics.completion_rate,
+            'bottleneck_avg_bottleneck_time': bottleneck_metrics.avg_bottleneck_time
         })
     
-    return animation, metrics
+    return anim, metrics
 
 
 def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Visualize trained BPTT models")
-    parser.add_argument("--model_dir", type=str, required=True, help="Directory containing trained models")
-    parser.add_argument("--step", type=int, default=None, help="Model step to visualize (default: latest)")
-    parser.add_argument("--output", type=str, default=None, help="Path to save the animation")
-    parser.add_argument("--cuda", action="store_true", help="Use CUDA if available")
-    parser.add_argument("--env_type", type=str, default="double_integrator", help="Environment type (double_integrator or crazyflie)")
-    parser.add_argument("--metrics_output", type=str, default=None, help="Path to save metrics as JSON (optional)")
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='可视化训练的BPTT策略')
+    parser.add_argument('--model_dir', type=str, required=True, help='包含训练模型的目录')
+    parser.add_argument('--config', type=str, help='配置文件路径（如果与模型目录不同）')
+    parser.add_argument('--device', type=str, default='auto', help='设备（cuda/cpu/auto）')
+    parser.add_argument('--output', type=str, help='输出GIF文件路径')
+    parser.add_argument('--step', type=int, help='要加载的特定模型步骤')
+    parser.add_argument('--save_metrics', type=str, help='保存指标的JSON文件路径')
+    
     args = parser.parse_args()
     
-    # Set up the device - Force GPU usage if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # 设置设备 - 强制使用GPU（如果可用）
+    if args.device == 'auto':
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    else:
+        device = torch.device(args.device)
+        # 传统支持cuda标志
     
-    # Legacy support for cuda flag
-    use_cuda = torch.cuda.is_available()
+    # 加载配置
+    config_path = args.config if args.config else os.path.join(args.model_dir, 'config.yaml')
+    if not os.path.exists(config_path):
+        config_path = os.path.join(args.model_dir, '..', 'config.yaml')
     
-    # Load configuration
-    config_path = Path(args.model_dir) / "config.yaml"
-    with open(config_path, 'r') as f:
+    with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
-    # Determine which model step to use
-    model_dir = Path(args.model_dir) / "models"
-    if args.step is None:
-        # First check if there's a final directory
-        final_dir = model_dir / "final"
-        if final_dir.is_dir() and (final_dir / "policy.pt").exists():
-            step = "final"
+    # 确定要使用的模型步骤
+    if args.step:
+        model_step = args.step
+    else:
+        # 首先检查是否有final目录
+        final_dir = os.path.join(args.model_dir, 'final')
+        if os.path.exists(final_dir):
+            model_step = 'final'
         else:
-            # Find the latest step
-            steps = [int(d.name) for d in model_dir.iterdir() if d.is_dir() and d.name.isdigit()]
-            if not steps:
-                raise ValueError(f"No model checkpoints found in {model_dir}")
-            step = max(steps)
+            # 查找最新步骤
+            models_dir = os.path.join(args.model_dir, 'models')
+            if os.path.exists(models_dir):
+                steps = [int(d) for d in os.listdir(models_dir) if d.isdigit()]
+                if steps:
+                    model_step = max(steps)
+                else:
+                    raise ValueError("在models目录中找不到训练步骤")
+            else:
+                raise ValueError("找不到models目录")
+    
+    print(f"从步骤加载模型: {model_step}")
+    
+    # 基于配置和类型创建环境
+    env_config = config.get('env', {})
+    
+    # 创建环境
+    if 'env_type' in config:
+        env_type = config['env_type']
     else:
-        step = args.step
+        env_type = 'double_integrator'  # 默认
     
-    print(f"Using model checkpoint from step {step}")
-    
-    # Create environment based on config and type
-    env_config = config['env']
-    env_type = args.env_type.lower()
-    
-    if env_type == "double_integrator":
+    if env_type == 'double_integrator':
         env = DoubleIntegratorEnv(env_config)
-    elif env_type == "crazyflie":
-        env = CrazyFlieEnv(env_config)
     else:
-        raise ValueError(f"Unsupported environment type: {env_type}. Choose 'double_integrator' or 'crazyflie'")
+        raise ValueError(f"不支持的环境类型: {env_type}")
     
-    # Move environment to device
+    # 将环境移动到设备
     env = env.to(device)
     
-    # Create policy network
-    # Use the policy configuration from YAML file
-    policy_network_config = config.get('networks', {}).get('policy', {})
+    # 创建策略网络
+    # 使用YAML文件中的策略配置
+    network_config = config.get('networks', {})
+    policy_config = network_config.get('policy', {})
     
-    if policy_network_config and ('perception' in policy_network_config or 'memory' in policy_network_config):
-        # Use configuration from YAML file (supports vision and other advanced features)
-        policy_config = policy_network_config.copy()
-        policy_config['type'] = 'bptt'
+    if policy_config:
+        # 使用YAML文件中的配置（支持视觉和其他高级特性）
+        obs_shape = env.get_observation_shape()
+        action_shape = env.get_action_shape()
         
-        # Ensure policy_head has correct output dimension
+        # 确保policy_head具有正确的输出维度
         if 'policy_head' not in policy_config:
             policy_config['policy_head'] = {}
-        policy_config['policy_head']['output_dim'] = env.action_shape[-1]
+        policy_config['policy_head']['output_dim'] = action_shape[-1]
     else:
-        # Fallback: create default configuration
-        hidden_dim = policy_network_config.get('hidden_dim', 64)
-        n_layers = policy_network_config.get('n_layers', 2)
+        # 后备方案：创建默认配置
+        obs_shape = env.get_observation_shape()
+        action_shape = env.get_action_shape()
         
-    policy_config = {
-        'type': 'bptt',
-        'perception': {
-            'input_dim': env.observation_shape[-1],
-                'hidden_dim': hidden_dim,
-                'num_layers': n_layers,
-            'activation': 'relu',
-            'use_batch_norm': False
-        },
-        'memory': {
-                'hidden_dim': hidden_dim,
-            'num_layers': 1
-        },
-        'policy_head': {
-            'output_dim': env.action_shape[-1],
-                'hidden_dims': [hidden_dim],
-            'action_scaling': True,
-            'action_bound': 1.0
-        }
-    }
+        if len(obs_shape) > 2:  # 视觉输入
+            policy_config = {
+                'perception': {
+                    'use_vision': True,
+                    'input_dim': obs_shape[-3:],
+                    'output_dim': 256,
+                    'vision': {
+                        'input_channels': obs_shape[-3],
+                        'channels': [32, 64, 128],
+                        'height': obs_shape[-2],
+                        'width': obs_shape[-1]
+                    }
+                },
+                'memory': {
+                    'hidden_dim': 128,
+                    'num_layers': 1
+                },
+                'policy_head': {
+                    'output_dim': action_shape[-1],
+                    'hidden_dims': [256],
+                    'activation': 'relu',
+                    'predict_alpha': True
+                }
+            }
+        else:  # 状态输入
+            policy_config = {
+                'perception': {
+                    'use_vision': False,
+                    'input_dim': obs_shape[-1],
+                    'output_dim': 128,
+                    'hidden_dims': [256, 256],
+                    'activation': 'relu'
+                },
+                'memory': {
+                    'hidden_dim': 128,
+                    'num_layers': 1
+                },
+                'policy_head': {
+                    'output_dim': action_shape[-1],
+                    'hidden_dims': [256, 256],
+                    'activation': 'relu',
+                    'predict_alpha': True
+                }
+            }
     
-    # Create policy network
+    # 创建策略网络
     policy_network = create_policy_from_config(policy_config)
     policy_network = policy_network.to(device)
     
-    # Create CBF network if available
+    # 如果可用，创建CBF网络
     cbf_network = None
-    cbf_config = config['networks'].get('cbf')
-    
+    cbf_config = network_config.get('cbf')
     if cbf_config:
-        # For now, we'll use a simple MLP as CBF network
-        cbf_input_dim = env.observation_shape[-1]
-        cbf_network = torch.nn.Sequential(
-            torch.nn.Linear(cbf_input_dim, cbf_config['hidden_dim']),
-            torch.nn.ReLU(),
-            torch.nn.Linear(cbf_config['hidden_dim'], cbf_config['hidden_dim']),
-            torch.nn.ReLU(),
-            torch.nn.Linear(cbf_config['hidden_dim'], 1)
+        # 目前，我们将使用简单的MLP作为CBF网络
+        obs_dim = obs_shape[-1] if len(obs_shape) <= 2 else np.prod(obs_shape[-3:])
+        cbf_network = nn.Sequential(
+            nn.Linear(obs_dim * env_config.get('num_agents', 8), 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
         ).to(device)
     
-    # Load the trained models
-    policy_path = model_dir / str(step) / "policy.pt"
-    policy_network.load_state_dict(torch.load(policy_path, map_location=device))
-    print(f"Loaded policy from {policy_path}")
-    
-    if cbf_network is not None:
-        cbf_path = model_dir / str(step) / "cbf.pt"
-        if cbf_path.exists():
-            cbf_network.load_state_dict(torch.load(cbf_path, map_location=device))
-            print(f"Loaded CBF network from {cbf_path}")
-        else:
-            print(f"Warning: CBF network file not found at {cbf_path}")
-    
-    # Output path
-    if args.output is None:
-        output_path = Path(args.model_dir) / f"visualization_step_{step}.gif"
+    # 加载训练的模型
+    if model_step == 'final':
+        model_path = os.path.join(args.model_dir, 'final')
     else:
-        output_path = Path(args.output)
-        # Ensure the extension is .gif if not specified
-        if output_path.suffix.lower() not in ['.gif', '.png', '.jpg', '.jpeg']:
-            output_path = output_path.with_suffix('.gif')
+        model_path = os.path.join(args.model_dir, 'models', str(model_step))
+    
+    # 加载策略网络
+    policy_path = os.path.join(model_path, 'actor.pkl')
+    if os.path.exists(policy_path):
+        policy_network.load_state_dict(torch.load(policy_path, map_location=device))
+        print(f"从{policy_path}加载策略网络")
+    else:
+        print(f"警告：在{policy_path}找不到策略网络")
+    
+    # 如果存在，加载CBF网络
+    if cbf_network:
+        cbf_path = os.path.join(model_path, 'cbf.pkl')
+        if os.path.exists(cbf_path):
+            cbf_network.load_state_dict(torch.load(cbf_path, map_location=device))
+            print(f"从{cbf_path}加载CBF网络")
+    
+    # 输出路径
+    if args.output:
+        output_path = args.output
+        # 如果未指定扩展名，确保扩展名为.gif
+        if not output_path.endswith('.gif'):
+            output_path += '.gif'
+    else:
+        output_path = os.path.join(args.model_dir, f'visualization_step_{model_step}.gif')
+    
+    # 确保输出目录存在
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # 获取可视化指标的CBF alpha值
+    cbf_alpha = env_config.get('cbf_alpha', 'Dynamic')
+    
+    # 将CBF alpha添加到训练配置以进行可视化
+    if 'cbf_alpha' not in config.get('env', {}):
+        config.setdefault('env', {})['cbf_alpha'] = cbf_alpha
+    
+    # 运行可视化
+    print(f"运行可视化并保存到: {output_path}")
+    try:
+        anim, metrics = visualize_policy(
+            env=env,
+            policy_network=policy_network,
+            cbf_network=cbf_network,
+            config=config,
+            output_path=output_path,
+            device=device
+        )
+        
+        # 用实验详情增强指标
+        metrics.update({
+            'model_step': model_step,
+            'config_path': config_path,
+            'device': str(device),
+            'cbf_alpha': cbf_alpha
+        })
+        
+        # 如果指定，将指标保存到文件
+        if args.save_metrics:
+            import json
+            metrics_serializable = {}
+            for key, value in metrics.items():
+                if isinstance(value, (list, np.ndarray)):
+                    metrics_serializable[key] = np.array(value).tolist()
+                else:
+                    metrics_serializable[key] = value
             
-    # Make sure the output directory exists
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Get CBF alpha value for metrics
-    cbf_alpha = env_config.get('cbf_alpha', config['training'].get('cbf_alpha', 1.0))
-    
-    # Add CBF alpha to training config for visualization
-    training_config = config['training'].copy()
-    training_config['cbf_alpha'] = cbf_alpha
-    
-    # Run visualization
-    animation, metrics = visualize_trajectory(
-        env=env,
-        policy_network=policy_network,
-        cbf_network=cbf_network,
-        device=device,
-        config=training_config,
-        save_path=str(output_path)
-    )
-    
-    # Enhance metrics with experiment details
-    metrics.update({
-        'cbf_alpha': cbf_alpha,
-        'num_agents': env.num_agents,
-        'area_size': env.area_size,
-        'model_step': step
-    })
-    
-    # Save metrics to file if specified
-    if args.metrics_output:
-        import json
-        metrics_path = Path(args.metrics_output)
-        metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(metrics_path, 'w') as f:
-            json.dump(metrics, f, indent=2)
-        print(f"Metrics saved to {metrics_path}")
-    
-    # Save metrics to standard location in model directory
-    metrics_file = Path(args.model_dir) / "metrics.json"
-    import json
-    with open(metrics_file, 'w') as f:
-        json.dump(metrics, f, indent=2)
-    print(f"Metrics also saved to {metrics_file}")
-    
-    # Print summary message
-    print(f"Visualization completed and saved to {output_path}")
-    print(f"CBF Alpha: {cbf_alpha}, Time to Goal: {metrics['time_to_goal']} steps, Min Separation: {metrics['min_separation_distance']:.3f}, Control Effort: {metrics['total_control_effort']:.3f}")
-    
-    return metrics
+            with open(args.save_metrics, 'w', encoding='utf-8') as f:
+                json.dump(metrics_serializable, f, indent=2, ensure_ascii=False)
+            print(f"指标已保存到: {args.save_metrics}")
+        else:
+            # 将指标保存到模型目录中的标准位置
+            metrics_path = os.path.join(args.model_dir, f'metrics_step_{model_step}.json')
+            metrics_serializable = {}
+            for key, value in metrics.items():
+                if isinstance(value, (list, np.ndarray)):
+                    metrics_serializable[key] = np.array(value).tolist()
+                else:
+                    metrics_serializable[key] = value
+            
+            with open(metrics_path, 'w', encoding='utf-8') as f:
+                json.dump(metrics_serializable, f, indent=2, ensure_ascii=False)
+        
+        # 打印摘要信息
+        print(f"\n可视化完成！")
+        print(f"动画已保存到: {output_path}")
+        print(f"指标已保存到: {metrics_path if not args.save_metrics else args.save_metrics}")
+        
+    except Exception as e:
+        print(f"可视化过程中出错: {e}")
+        import traceback
+        traceback.print_exc()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main() 

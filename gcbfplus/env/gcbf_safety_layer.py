@@ -9,111 +9,107 @@ from .multi_agent_env import MultiAgentState
 
 class GCBFSafetyLayer(nn.Module):
     """
-    Differentiable safety layer implementing Control Barrier Function (CBF) constraints.
+    实现控制屏障函数（CBF）约束的可微分安全层。
     
-    This layer takes raw actions and filters them to ensure safety constraints
-    are satisfied. It is designed to be used as part of the environment's apply_safety_layer
-    method.
+    该层接收原始动作并过滤它们以确保满足安全约束。
+    设计用于环境的apply_safety_layer方法的一部分。
+    支持自适应安全边距（动态Alpha）机制。
     """
     
     def __init__(self, config: Dict):
         """
-        Initialize the safety layer.
+        初始化安全层。
         
-        Args:
-            config: Dictionary containing safety layer parameters
-                Required keys:
-                - 'alpha': CBF parameter alpha (h_dot + alpha * h >= 0)
-                - 'eps': Small positive parameter for numerical stability
-                - 'safety_margin': Safety distance margin for collision avoidance
-                Optional keys:
-                - 'use_qp': Whether to use QP solver (otherwise uses simpler projection)
-                - 'qp_relaxation_weight': Weight for constraint relaxation
-                - 'max_iterations': Maximum number of iterations for solvers
+        参数:
+            config: 包含安全层参数的字典
+                必需键值:
+                - 'alpha': CBF参数alpha (h_dot + alpha * h >= 0)
+                - 'eps': 数值稳定性的小正参数
+                - 'safety_margin': 碰撞避免的安全距离边距
+                可选键值:
+                - 'use_qp': 是否使用QP求解器（否则使用简单投影）
+                - 'qp_relaxation_weight': 约束松弛权重
+                - 'max_iterations': 求解器的最大迭代次数
         """
         super(GCBFSafetyLayer, self).__init__()
         
-        # CBF parameters
+        # CBF参数
         self.alpha = config.get('alpha', 1.0)
         self.eps = config.get('eps', 0.02)
         self.safety_margin = config.get('safety_margin', 0.05)
         
-        # QP parameters
+        # QP参数
         self.use_qp = config.get('use_qp', True)
         self.qp_relaxation_weight = config.get('qp_relaxation_weight', 10.0)
         self.max_iterations = config.get('max_iterations', 10)
         
-        # Register parameters
+        # 注册参数
         self.register_buffer('alpha_tensor', torch.tensor([self.alpha], dtype=torch.float32))
         
     def barrier_function(self, state: MultiAgentState) -> torch.Tensor:
         """
-        Compute barrier function values for the current state.
+        计算智能体间和智能体-障碍物间的屏障函数值。
         
-        The barrier function h(x) is defined such that h(x) >= 0 for safe states
-        and h(x) < 0 for unsafe states.
-        
-        Args:
-            state: Current environment state
+        参数:
+            state: 多智能体状态，包含位置、速度和障碍物信息
             
-        Returns:
-            Barrier function values [batch_size, n_agents, n_constraints]
+        返回:
+            屏障函数值张量 [batch, n_agents, n_constraints]
         """
-        batch_size = state.batch_size
-        n_agents = state.positions.shape[1]
-        device = state.positions.device
+        batch_size, n_agents, pos_dim = state.positions.shape
         
-        # Compute agent-agent barrier functions (collision avoidance)
-        # For each pair of agents, h(x) = ||p_i - p_j||^2 - (2r)^2 where r is agent radius
+        # 计算智能体间屏障函数（碰撞避免）
+        # 对于每对智能体，h(x) = ||p_i - p_j||^2 - (2r)^2，其中r是智能体半径
         
-        # Compute pairwise differences between positions
-        # Shape: [batch, n_agents, n_agents, pos_dim]
+        # 计算位置间的成对差异
+        # 形状: [batch, n_agents, n_agents, pos_dim]
         pos_diff = state.positions.unsqueeze(2) - state.positions.unsqueeze(1)
         
-        # Compute squared distances
-        # Shape: [batch, n_agents, n_agents]
-        dist_squared = torch.sum(pos_diff**2, dim=3)
+        # 计算平方距离
+        # 形状: [batch, n_agents, n_agents]
+        dist_squared = torch.sum(pos_diff**2, dim=-1)
         
-        # Compute threshold (2 * radius + margin)^2
-        threshold = (2 * (self.safety_margin + 0.05))**2
+        # 计算阈值 (2 * radius + margin)^2
+        agent_radius = getattr(state, 'agent_radius', 0.05)  # 默认半径
+        threshold = (2 * agent_radius + self.safety_margin)**2
         
-        # Create barrier values: h(x) = dist_squared - threshold
-        # Shape: [batch, n_agents, n_agents]
-        h_agent_agent = dist_squared - threshold
+        # 创建屏障值: h(x) = dist_squared - threshold
+        # 形状: [batch, n_agents, n_agents]
+        h_agent = dist_squared - threshold
         
-        # Set diagonal to large values (no self-collision)
-        mask = torch.eye(n_agents, device=device).unsqueeze(0).expand(batch_size, -1, -1)
-        h_agent_agent = h_agent_agent.masked_fill(mask == 1, 1000.0)
+        # 将对角线设置为大值（无自碰撞）
+        mask = torch.eye(n_agents, device=h_agent.device, dtype=torch.bool)
+        h_agent = h_agent.masked_fill(mask.unsqueeze(0), float('inf'))
         
-        # If there are obstacles, compute agent-obstacle barrier functions
-        if state.obstacles is not None:
-            # Extract obstacle positions and radii
+        # 如果存在障碍物，计算智能体-障碍物屏障函数
+        if hasattr(state, 'obstacles') and state.obstacles is not None:
+            # 提取障碍物位置和半径
             obstacle_positions = state.obstacles[..., :-1]  # [batch, n_obs, pos_dim]
             obstacle_radii = state.obstacles[..., -1:]     # [batch, n_obs, 1]
             
-            # Compute differences between agent and obstacle positions
-            # Shape: [batch, n_agents, n_obs, pos_dim]
-            obs_diff = state.positions.unsqueeze(2) - obstacle_positions.unsqueeze(1)
+            # 计算智能体与障碍物位置之间的差异
+            # 形状: [batch, n_agents, n_obs, pos_dim]
+            agent_obs_diff = state.positions.unsqueeze(2) - obstacle_positions.unsqueeze(1)
             
-            # Compute squared distances
-            # Shape: [batch, n_agents, n_obs]
-            obs_dist_squared = torch.sum(obs_diff**2, dim=3)
+            # 计算平方距离
+            # 形状: [batch, n_agents, n_obs]
+            agent_obs_dist_squared = torch.sum(agent_obs_diff**2, dim=-1)
             
-            # Compute threshold: (agent_radius + obstacle_radius + margin)^2
-            # Shape: [batch, 1, n_obs]
-            obs_threshold = (0.05 + obstacle_radii.squeeze(-1).unsqueeze(1) + self.safety_margin)**2
+            # 计算阈值: (agent_radius + obstacle_radius + margin)^2
+            # 形状: [batch, 1, n_obs]
+            obs_threshold = (agent_radius + obstacle_radii.squeeze(-1).unsqueeze(1) + self.safety_margin)**2
             
-            # Create barrier values: h(x) = dist_squared - threshold
-            # Shape: [batch, n_agents, n_obs]
-            h_agent_obs = obs_dist_squared - obs_threshold
+            # 创建屏障值: h(x) = dist_squared - threshold
+            # 形状: [batch, n_agents, n_obs]
+            h_obstacle = agent_obs_dist_squared - obs_threshold
             
-            # Combine agent-agent and agent-obstacle constraints
-            # Shape: [batch, n_agents, n_agents + n_obs]
-            h = torch.cat([h_agent_agent, h_agent_obs], dim=2)
+            # 组合智能体-智能体和智能体-障碍物约束
+            # 形状: [batch, n_agents, n_agents + n_obs]
+            h = torch.cat([h_agent, h_obstacle], dim=-1)
         else:
-            # Just agent-agent constraints
-            h = h_agent_agent
-        
+            # 仅智能体-智能体约束
+            h = h_agent
+            
         return h
     
     def barrier_jacobian(self, state: MultiAgentState) -> torch.Tensor:
@@ -126,53 +122,53 @@ class GCBFSafetyLayer(nn.Module):
         Returns:
             Jacobian tensor [batch_size, n_agents, n_constraints, state_dim]
         """
-        # We need to compute gradients, so enable autograd
+        # 我们需要计算梯度，因此启用自动微分
         batch_size = state.batch_size
         n_agents = state.positions.shape[1]
         pos_dim = state.positions.shape[2]
         device = state.positions.device
         
-        # Create computation graph for automatic differentiation
+        # 为自动微分创建计算图
         positions = state.positions.clone().requires_grad_(True)
         
-        # Compute pairwise differences between positions
+        # 计算位置间的成对差异
         pos_diff = positions.unsqueeze(2) - positions.unsqueeze(1)
         
-        # Compute squared distances
+        # 计算平方距离
         dist_squared = torch.sum(pos_diff**2, dim=3)
         
-        # Compute threshold
+        # 计算阈值
         threshold = (2 * (self.safety_margin + 0.05))**2
         
-        # Create barrier values: h(x) = dist_squared - threshold
+        # 创建屏障值: h(x) = dist_squared - threshold
         h_agent_agent = dist_squared - threshold
         
-        # Set diagonal to large values (no self-collision)
+        # 将对角线设置为大值（无自碰撞）
         mask = torch.eye(n_agents, device=device).unsqueeze(0).expand(batch_size, -1, -1)
         h_agent_agent = h_agent_agent.masked_fill(mask == 1, 1000.0)
         
-        # Get number of constraints
+        # 获取约束数量
         if state.obstacles is not None:
             n_obs = state.obstacles.shape[1]
             n_constraints = n_agents + n_obs
         else:
             n_constraints = n_agents
         
-        # Initialize Jacobian tensor
-        # We only compute gradients w.r.t. positions for simplicity
-        # Full version would include velocities
+        # 初始化雅可比矩阵张量
+        # 为简化起见，我们只计算相对于位置的梯度
+        # 完整版本应包含速度
         jacobian = torch.zeros(batch_size, n_agents, n_constraints, pos_dim*2, device=device)
         
-        # For each agent and each constraint, compute the gradient
+        # 对于每个智能体和每个约束，计算梯度
         for i in range(n_agents):
             for j in range(n_agents):
                 if i != j:
-                    # Compute gradient of h_ij w.r.t. positions
-                    # We're computing ∂h_ij/∂p_i and ∂h_ij/∂p_j
+                    # 计算相对于位置的h_ij梯度
+                    # 我们正在计算∂h_ij/∂p_i和∂h_ij/∂p_j
                     grad_outputs = torch.zeros_like(h_agent_agent)
                     grad_outputs[:, i, j] = 1.0
                     
-                    # Autograd to get gradients
+                    # 使用自动微分获取梯度
                     grads = torch.autograd.grad(
                         outputs=h_agent_agent,
                         inputs=positions,
@@ -182,36 +178,36 @@ class GCBFSafetyLayer(nn.Module):
                         allow_unused=True
                     )[0]
                     
-                    # Store gradients in Jacobian tensor
-                    # For agent i, constraint j (which comes from agent j)
+                    # 在雅可比矩阵张量中存储梯度
+                    # 对于智能体i，约束j（来自智能体j）
                     jacobian[:, i, j, :pos_dim] = grads[:, i]
         
-        # If we have obstacles, compute gradients for agent-obstacle constraints
+        # 如果有障碍物，计算智能体-障碍物约束的梯度
         if state.obstacles is not None:
-            # Extract obstacle positions and radii
+            # 提取障碍物位置和半径
             obstacle_positions = state.obstacles[..., :-1]  # [batch, n_obs, pos_dim]
             obstacle_radii = state.obstacles[..., -1:]     # [batch, n_obs, 1]
             
-            # Compute differences between agent and obstacle positions
+            # 计算智能体与障碍物位置之间的差异
             obs_diff = positions.unsqueeze(2) - obstacle_positions.unsqueeze(1)
             
-            # Compute squared distances
+            # 计算平方距离
             obs_dist_squared = torch.sum(obs_diff**2, dim=3)
             
-            # Compute threshold
+            # 计算阈值
             obs_threshold = (0.05 + obstacle_radii.squeeze(-1).unsqueeze(1) + self.safety_margin)**2
             
-            # Create barrier values: h(x) = dist_squared - threshold
+            # 创建屏障值: h(x) = dist_squared - threshold
             h_agent_obs = obs_dist_squared - obs_threshold
             
-            # For each agent and each obstacle, compute the gradient
+            # 对于每个智能体和每个障碍物，计算梯度
             for i in range(n_agents):
                 for j in range(n_obs):
-                    # Compute gradient of h_ij w.r.t. positions
+                    # 计算相对于位置的h_ij梯度
                     grad_outputs = torch.zeros_like(h_agent_obs)
                     grad_outputs[:, i, j] = 1.0
                     
-                    # Autograd to get gradients
+                    # 使用自动微分获取梯度
                     grads = torch.autograd.grad(
                         outputs=h_agent_obs,
                         inputs=positions,
@@ -221,52 +217,52 @@ class GCBFSafetyLayer(nn.Module):
                         allow_unused=True
                     )[0]
                     
-                    # Store gradients in Jacobian tensor
-                    # For agent i, constraint n_agents+j (which comes from obstacle j)
+                    # 在雅可比矩阵张量中存储梯度
+                    # 对于智能体i，约束n_agents+j（来自障碍物j）
                     jacobian[:, i, n_agents+j, :pos_dim] = grads[:, i]
         
         return jacobian
     
     def control_affine_dynamics(self, state: MultiAgentState) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute the control-affine dynamics matrices f(x) and g(x).
+        计算控制仿射动力学矩阵f(x)和g(x)。
         
-        For a double integrator system:
+        对于双积分器系统:
         dx/dt = f(x) + g(x)u
         
-        where f(x) = [vx, vy, 0, 0]^T
-        and g(x) = [0, 0; 0, 0; 1/m, 0; 0, 1/m]
+        其中f(x) = [vx, vy, 0, 0]^T
+        且g(x) = [0, 0; 0, 0; 1/m, 0; 0, 1/m]
         
-        Args:
-            state: Current environment state
+        参数:
+            state: 当前环境状态
             
-        Returns:
-            Tuple of (f, g) where:
-            - f: Drift term [batch_size, n_agents, state_dim]
-            - g: Control input term [batch_size, n_agents, state_dim, action_dim]
+        返回:
+            (f, g)的元组，其中:
+            - f: 漂移项 [batch_size, n_agents, state_dim]
+            - g: 控制输入项 [batch_size, n_agents, state_dim, action_dim]
         """
         batch_size = state.batch_size
         n_agents = state.positions.shape[1]
         pos_dim = state.positions.shape[2]
         device = state.positions.device
         
-        # For a double integrator with state [x, y, vx, vy], we have:
+        # 对于状态为[x, y, vx, vy]的双积分器，我们有:
         # dx/dt = vx
         # dy/dt = vy
         # dvx/dt = 1/m * fx
         # dvy/dt = 1/m * fy
         
-        # Drift term f(x) = [vx, vy, 0, 0]^T
+        # 漂移项f(x) = [vx, vy, 0, 0]^T
         f = torch.zeros(batch_size, n_agents, 2*pos_dim, device=device)
-        f[:, :, :pos_dim] = state.velocities  # Position derivatives = velocities
+        f[:, :, :pos_dim] = state.velocities  # 位置导数 = 速度
         
-        # Control input term g(x) = [0, 0; 0, 0; 1/m, 0; 0, 1/m]
+        # 控制输入项g(x) = [0, 0; 0, 0; 1/m, 0; 0, 1/m]
         g = torch.zeros(batch_size, n_agents, 2*pos_dim, pos_dim, device=device)
         
-        # Default mass = 1.0 if not specified
-        m = 0.1  # Default mass
+        # 默认质量 = 1.0 如果未指定
+        m = 0.1  # 默认质量
         
-        # Set up control matrix - each force component affects only its corresponding velocity
+        # 设置控制矩阵 - 每个力分量只影响其对应的速度
         for i in range(pos_dim):
             g[:, :, pos_dim+i, i] = 1.0 / m
         
@@ -441,20 +437,20 @@ class GCBFSafetyLayer(nn.Module):
 
 class GCBFPlusAgent(nn.Module):
     """
-    Agent that combines a policy network with a GCBF safety layer.
+    结合策略网络和GCBF安全层的智能体。
     
-    This agent encapsulates both the policy network and safety layer,
-    providing a unified interface for generating safe actions.
+    该智能体封装了策略网络和安全层，
+    提供了生成安全动作的统一接口。
     """
     
     def __init__(self, policy_network: nn.Module, safety_layer: GCBFSafetyLayer, cbf_network: Optional[nn.Module] = None):
         """
-        Initialize the GCBF+ agent.
+        初始化GCBF+智能体。
         
-        Args:
-            policy_network: Neural network policy
-            safety_layer: CBF safety layer for action filtering
-            cbf_network: Optional neural network for learned barrier functions
+        参数:
+            policy_network: 神经网络策略
+            safety_layer: 用于动作过滤的CBF安全层
+            cbf_network: 可选的学习屏障函数神经网络
         """
         super(GCBFPlusAgent, self).__init__()
         
@@ -464,23 +460,23 @@ class GCBFPlusAgent(nn.Module):
         
     def forward(self, state: MultiAgentState) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Generate safe actions for the current state.
+        为当前状态生成安全动作。
         
-        Args:
-            state: Current environment state
+        参数:
+            state: 当前环境状态
             
-        Returns:
-            Tuple of (safe_action, raw_action):
-            - safe_action: Actions after safety filtering
-            - raw_action: Raw actions from policy before filtering
+        返回:
+            (safe_action, raw_action)的元组:
+            - safe_action: 安全过滤后的动作
+            - raw_action: 策略网络输出的原始动作
         """
-        # Get observations from state
+        # 从状态获取观测
         observations = self.get_observations(state)
         
-        # Generate raw actions from policy
+        # 从策略生成原始动作
         raw_action = self.policy_network(observations)
         
-        # Apply safety filtering
+        # 应用安全过滤
         safe_action = self.safety_layer(state, raw_action)
         
         return safe_action, raw_action

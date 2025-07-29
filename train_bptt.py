@@ -13,248 +13,245 @@ from gcbfplus.trainer.bptt_trainer import BPTTTrainer
 
 
 def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Train a multi-agent safe control system using BPTT")
-    parser.add_argument("--config", type=str, default="config/bptt_config.yaml", help="Path to configuration file")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--cuda", action="store_true", help="Use CUDA if available")
-    parser.add_argument("--log_dir", type=str, default="logs/bptt", help="Directory to save logs and models")
-    parser.add_argument("--env_type", type=str, default="double_integrator", help="Environment type (double_integrator or crazyflie)")
-    parser.add_argument("--load_checkpoint", type=str, help="Load from checkpoint")
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='训练BPTT策略')
+    parser.add_argument('--config', type=str, required=True, help='配置文件路径')
+    parser.add_argument('--cuda', action='store_true', help='使用CUDA')
+    parser.add_argument('--device', type=str, default=None, help='指定设备（cuda或cpu）')
+    parser.add_argument('--env_type', type=str, default='double_integrator', help='环境类型')
+    parser.add_argument('--log_dir', type=str, default='logs/bptt', help='日志目录')
+    parser.add_argument('--seed', type=int, default=42, help='随机种子')
+    
     args = parser.parse_args()
     
-    # Set up the device - Force GPU usage if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # 设置设备 - 强制使用GPU（如果可用）
+    if args.device:
+        device = torch.device(args.device)
+    elif args.cuda or torch.cuda.is_available():
+        device = torch.device('cuda')
+        # 传统支持cuda标志
+    else:
+        device = torch.device('cpu')
     
-    # Legacy support for cuda flag
-    use_cuda = torch.cuda.is_available()
-    
-    # Set random seeds for reproducibility
-    torch.manual_seed(args.seed)
+    # 设置随机种子以确保可重现性
+    random.seed(args.seed)
     np.random.seed(args.seed)
-    if use_cuda:
-        torch.cuda.manual_seed_all(args.seed)
-        
-    # Enable anomaly detection to help debug gradient issues
+    torch.manual_seed(args.seed)
+    if device.type == 'cuda':
+        torch.cuda.manual_seed(args.seed)
+    
+    # 启用异常检测以帮助调试梯度问题
     torch.autograd.set_detect_anomaly(True)
     
-    # Load configuration
-    with open(args.config, 'r') as f:
+    # 加载配置
+    with open(args.config, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
-    # Create log directory
-    log_dir = Path(args.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
+    # 创建日志目录
+    os.makedirs(args.log_dir, exist_ok=True)
     
-    # Save the configuration to the log directory
-    with open(log_dir / "config.yaml", 'w') as f:
+    # 将配置保存到日志目录
+    with open(os.path.join(args.log_dir, 'config.yaml'), 'w', encoding='utf-8') as f:
         yaml.dump(config, f)
     
-    # Extract configuration sections with default values for missing sections
-    run_name = config.get('run_name', 'GCBF+_BTN_BPTT')
+    # 使用默认值提取配置部分，处理缺失部分
     env_config = config.get('env', {})
-    network_config = config.get('networks', {})
     training_config = config.get('training', {})
+    network_config = config.get('networks', {})
     
-    # Extract policy and CBF network configurations
-    policy_network_config = network_config.get('policy', {})
-    cbf_network_config = network_config.get('cbf')  # Can be None
+    # 提取策略和CBF网络配置
+    policy_config = network_config.get('policy', {})
+    cbf_network_config = network_config.get('cbf')  # 可能为None
     
-    # Environment type from command-line arguments
-    env_type = args.env_type.lower()
+    # 从命令行参数获取环境类型
+    env_type = args.env_type
     
-    # 1. Create environment based on config
-    if env_type == "double_integrator":
+    # 1. 基于配置创建环境
+    if env_type == 'double_integrator':
         env = DoubleIntegratorEnv(env_config)
-    elif env_type == "crazyflie":
-        env = CrazyFlieEnv(env_config)
     else:
-        raise ValueError(f"Unsupported environment type: {env_type}. Choose 'double_integrator' or 'crazyflie'")
+        raise ValueError(f"不支持的环境类型: {env_type}")
     
-    # Move environment to device
+    print(f"创建环境: {env_type}")
+    
+    # 将环境移动到设备
     env = env.to(device)
     
-    # 2. Create policy network
-    # Use the policy configuration from YAML file
-    if policy_network_config:
-        # Use configuration from YAML file (supports vision and other advanced features)
-        policy_config = policy_network_config.copy()
-        policy_config['type'] = 'bptt'
+    # 2. 创建策略网络
+    # 使用YAML文件中的策略配置
+    if policy_config:
+        # 确保策略配置具有正确的观测和动作维度
+        obs_shape = env.get_observation_shape()
+        action_shape = env.get_action_shape()
         
-        # Ensure policy_head has correct output dimension
-        if 'policy_head' not in policy_config:
-            policy_config['policy_head'] = {}
-        policy_config['policy_head']['output_dim'] = env.action_shape[-1]
+        print(f"观测形状: {obs_shape}")
+        print(f"动作形状: {action_shape}")
         
-        # Add default values for missing perception config if needed
+        # 如果需要，为缺失的感知配置添加默认值
         if 'perception' not in policy_config:
-            hidden_dim = policy_network_config.get('hidden_dim', 64)
-            n_layers = policy_network_config.get('n_layers', 2)
-            obs_dim = env.observation_shape[-1]
-            print(f"Environment observation dimension: {obs_dim}")
-            
-            policy_config['perception'] = {
-                'input_dim': obs_dim,
-                'hidden_dim': hidden_dim,
-                'num_layers': n_layers,
-                'activation': 'relu',
-                'use_batch_norm': False
-            }
+            policy_config['perception'] = {}
         
-        # Add default memory config if needed
+        perception_config = policy_config['perception']
+        
+        # 处理视觉输入
+        if len(obs_shape) > 2:  # 视觉输入 [n_agents, channels, height, width]
+            perception_config.update({
+                'use_vision': True,
+                'input_dim': obs_shape[-3:],  # [channels, height, width]
+                'output_dim': perception_config.get('output_dim', 256)
+            })
+        else:  # 状态输入 [n_agents, obs_dim]
+            perception_config.update({
+                'use_vision': False,
+                'input_dim': obs_shape[-1],  # obs_dim
+                'output_dim': perception_config.get('output_dim', 128),
+                'hidden_dims': perception_config.get('hidden_dims', [256, 256])
+            })
+        
+        # 如果需要，添加默认记忆配置
         if 'memory' not in policy_config:
-            hidden_dim = policy_network_config.get('hidden_dim', 64)
-            policy_config['memory'] = {
-                'hidden_dim': hidden_dim,
-                'num_layers': 1
+            policy_config['memory'] = {}
+        
+        memory_config = policy_config['memory']
+        memory_config.update({
+            'hidden_dim': memory_config.get('hidden_dim', 128),
+            'num_layers': memory_config.get('num_layers', 1)
+        })
+        
+        # 确保policy_head具有所有必需参数
+        if 'policy_head' not in policy_config:
+            # 从感知或记忆配置获取hidden_dim，或使用默认值
+            if len(obs_shape) > 2:  # 视觉情况
+                hidden_dims = perception_config.get('output_dim', 256)
+            else:  # 状态情况
+                hidden_dims = perception_config.get('hidden_dims', [256, 256])
+                if isinstance(hidden_dims, list):
+                    hidden_dims = hidden_dims[0] if hidden_dims else 256
+            
+            policy_config['policy_head'] = {
+                'output_dim': action_shape[-1],  # action_dim
+                'hidden_dims': [hidden_dims],
+                'activation': 'relu',
+                'predict_alpha': True  # 启用自适应安全边距
             }
+        else:
+            policy_head_config = policy_config['policy_head']
+            policy_head_config['output_dim'] = action_shape[-1]  # 确保正确的动作维度
+            if 'predict_alpha' not in policy_head_config:
+                policy_head_config['predict_alpha'] = True  # 默认启用动态alpha
+        
+        print(f"策略配置: {policy_config}")
     else:
-        # Fallback: create default configuration if no policy config in YAML
-        hidden_dim = 64
-        n_layers = 2
-    obs_dim = env.observation_shape[-1]
-    print(f"Environment observation dimension: {obs_dim}")
+        # 后备方案：如果YAML中没有策略配置，创建默认配置
+        obs_shape = env.get_observation_shape()
+        action_shape = env.get_action_shape()
+        
+        print(f"观测形状: {obs_shape}")
+        print(f"动作形状: {action_shape}")
+        
+        if len(obs_shape) > 2:  # 视觉输入
+            policy_config = {
+                'perception': {
+                    'use_vision': True,
+                    'input_dim': obs_shape[-3:],  # [channels, height, width]
+                    'output_dim': 256,
+                    'vision': {
+                        'input_channels': obs_shape[-3],
+                        'channels': [32, 64, 128],
+                        'height': obs_shape[-2],
+                        'width': obs_shape[-1]
+                    }
+                },
+                'memory': {
+                    'hidden_dim': 128,
+                    'num_layers': 1
+                },
+                'policy_head': {
+                    'output_dim': action_shape[-1],
+                    'hidden_dims': [256],
+                    'activation': 'relu',
+                    'predict_alpha': True
+                }
+            }
+        else:  # 状态输入
+            policy_config = {
+                'perception': {
+                    'use_vision': False,
+                    'input_dim': obs_shape[-1],
+                    'output_dim': 128,
+                    'hidden_dims': [256, 256],
+                    'activation': 'relu'
+                },
+                'memory': {
+                    'hidden_dim': 128,
+                    'num_layers': 1
+                },
+                'policy_head': {
+                    'output_dim': action_shape[-1],
+                    'hidden_dims': [256, 256],
+                    'activation': 'relu',
+                    'predict_alpha': True
+                }
+            }
     
-    policy_config = {
-        'type': 'bptt',
-        'perception': {
-                'input_dim': obs_dim,
-            'hidden_dim': hidden_dim,
-            'num_layers': n_layers,
-            'activation': 'relu',
-            'use_batch_norm': False
-        },
-        'memory': {
-            'hidden_dim': hidden_dim,
-            'num_layers': 1
-        },
-        'policy_head': {
-                'output_dim': env.action_shape[-1],
-            'hidden_dims': [hidden_dim],
-            'action_scaling': True,
-            'action_bound': 1.0
-        }
-    }
-    
-    # Create the policy network
+    # 创建策略网络
     policy_network = create_policy_from_config(policy_config)
     policy_network = policy_network.to(device)
     
-    # 3. Create CBF network (optional)
+    # 3. 创建CBF网络（可选）
     cbf_network = None
-    
-    # Extract CBF alpha parameter from configuration (needed for trainer config)
-    cbf_alpha = env_config.get('cbf_alpha', training_config.get('cbf_alpha', 1.0))
-    
-    if cbf_network_config is not None:
-        # Extract CBF configuration values with defaults
-        cbf_hidden_dim = cbf_network_config.get('hidden_dim', 64)
-        safety_margin = env_config.get('safety_margin', env_config.get('car_radius', 0.05) * 1.1)
+    if cbf_network_config:
+        # 从配置中提取CBF alpha参数（训练器配置需要）
+        cbf_alpha = cbf_network_config.get('alpha', 1.0)
         
-        # Prepare CBF safety layer configuration
-        safety_layer_config = {
-            'alpha': cbf_alpha,
-            'eps': 0.02,
-            'safety_margin': safety_margin,
-            'use_qp': True
-        }
-        
-        # Create CBF safety layer
-        safety_layer = GCBFSafetyLayer(safety_layer_config)
-        safety_layer = safety_layer.to(device)
-        
-        # For now, we'll use a simple MLP as CBF network
-        cbf_input_dim = env.observation_shape[-1]
-        cbf_network = torch.nn.Sequential(
-            torch.nn.Linear(cbf_input_dim, cbf_hidden_dim),
-            torch.nn.ReLU(),
-            torch.nn.Linear(cbf_hidden_dim, cbf_hidden_dim),
-            torch.nn.ReLU(),
-            torch.nn.Linear(cbf_hidden_dim, 1)
+        # 基于CBF网络配置创建CBF网络
+        # 这里使用简单的MLP作为CBF网络的占位符
+        obs_dim = obs_shape[-1] if len(obs_shape) <= 2 else np.prod(obs_shape[-3:])
+        cbf_network = nn.Sequential(
+            nn.Linear(obs_dim * env_config.get('num_agents', 8), 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
         ).to(device)
+        
+        print(f"创建CBF网络，alpha={cbf_alpha}")
     
-    # 4. Create optimizer
-    optimizer_params = []
-    optimizer_params.extend(policy_network.parameters())
-    if cbf_network is not None:
-        optimizer_params.extend(cbf_network.parameters())
-    
-    # Get optimizer parameters with defaults
-    learning_rate = training_config.get('learning_rate', 0.001)
-    
-    optimizer = torch.optim.Adam(
-        optimizer_params,
-        lr=learning_rate
-    )
-    
-    # 5. Extract training parameters with defaults
-    training_steps = training_config.get('training_steps', 10000)
-    horizon_length = training_config.get('horizon_length', 50)
-    eval_horizon = training_config.get('eval_horizon', 100)
-    eval_interval = training_config.get('eval_interval', 100)
-    save_interval = training_config.get('save_interval', 1000)
-    max_grad_norm = training_config.get('max_grad_norm', 1.0)
-    goal_weight = training_config.get('goal_weight', 1.0)
-    safety_weight = training_config.get('safety_weight', 10.0)
-    control_weight = training_config.get('control_weight', 0.1)
-    use_lr_scheduler = training_config.get('use_lr_scheduler', False)
-    
-    # Get environment parameters with defaults
-    num_agents = env_config.get('num_agents', 8)
-    area_size = env_config.get('area_size', 1.0)
-    
-    # Create trainer configuration
+    # 4. 创建训练器
     trainer_config = {
-        'run_name': run_name,
-        'log_dir': str(log_dir),
-        'num_agents': num_agents,
-        'area_size': area_size,
-        'training_steps': training_steps,
-        'horizon_length': horizon_length,
-        'eval_horizon': eval_horizon,
-        'eval_interval': eval_interval,
-        'save_interval': save_interval,
-        'max_grad_norm': max_grad_norm,
-        'goal_weight': goal_weight,
-        'safety_weight': safety_weight,
-        'control_weight': control_weight,
-        'cbf_alpha': cbf_alpha,
-        'use_lr_scheduler': use_lr_scheduler
+        'horizon_length': training_config.get('horizon_length', 64),
+        'learning_rate': training_config.get('learning_rate', 1e-4),
+        'training_steps': training_config.get('steps', 10000),
+        'loss_weights': training_config.get('loss_weights', {}),
+        'batch_size': training_config.get('batch_size', 32),
+        'device': device,
+        'log_interval': training_config.get('log_interval', 100),
+        'save_interval': training_config.get('save_interval', 1000),
+        'cbf_alpha': env_config.get('cbf_alpha', 1.0),  # 传递CBF alpha给训练器
+        'temporal_decay': training_config.get('temporal_decay', {}),
+        'wandb_config': training_config.get('wandb', {})
     }
     
-    # 6. Create the trainer
     trainer = BPTTTrainer(
         env=env,
         policy_network=policy_network,
         cbf_network=cbf_network,
-        optimizer=optimizer,
         config=trainer_config
     )
     
-    # 7. Load checkpoint if provided
-    if args.load_checkpoint:
-        checkpoint_path = Path(args.load_checkpoint)
-        if checkpoint_path.exists():
-            checkpoint_step = int(checkpoint_path.name)
-            trainer.load_models(checkpoint_step)
-            print(f"Loaded checkpoint from step {checkpoint_step}")
-        else:
-            print(f"Warning: Checkpoint {checkpoint_path} not found")
+    print(f"开始训练，共{trainer_config['training_steps']}步...")
+    print(f"使用设备: {device}")
+    print(f"时间范围长度: {trainer_config['horizon_length']}")
+    print(f"学习率: {trainer_config['learning_rate']}")
+    print(f"批处理大小: {trainer_config['batch_size']}")
     
-    # 8. Run training
-    print(f"Starting training with configuration:")
-    print(f"  Run name: {run_name}")
-    print(f"  Environment: {env_type}")
-    print(f"  Num agents: {num_agents}")
-    print(f"  CBF alpha: {cbf_alpha}")
-    print(f"  Training steps: {training_steps}")
-    print(f"  BPTT horizon length: {horizon_length}")
-    print(f"  Device: {device}")
+    # 设置保存目录
+    trainer.set_save_dir(args.log_dir)
     
+    # 开始训练
     trainer.train()
-    print("Training completed successfully!")
+    
+    print("训练完成！")
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main() 

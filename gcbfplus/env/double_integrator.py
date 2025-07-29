@@ -7,64 +7,65 @@ from dataclasses import dataclass
 from .multi_agent_env import MultiAgentEnv, MultiAgentState, StepResult
 from ..utils.autograd import g_decay, apply_temporal_decay
 
-# Vision-related imports
+# 视觉相关导入
 from .vision_renderer import SimpleDepthRenderer, create_simple_renderer
 
 
 @dataclass
 class DoubleIntegratorState(MultiAgentState):
-    """State representation for double integrator dynamics."""
-    # Inherits all fields from MultiAgentState
+    """双积分器动力学的状态表示。"""
+    # 继承MultiAgentState的所有字段
 
 
 class DoubleIntegratorEnv(MultiAgentEnv):
     """
-    Differentiable environment for multi-agent double integrator dynamics.
+    多智能体双积分器动力学的可微分环境。
     
-    Each agent has a state [x, y, vx, vy] and control inputs [fx, fy].
-    The dynamics follow the double integrator model: ẍ = f/m.
+    每个智能体具有状态[x, y, vx, vy]和控制输入[fx, fy]。
+    动力学遵循双积分器模型：ẍ = f/m。
+    支持自适应安全边距和时序梯度衰减机制。
     """
     
     def __init__(self, config: Dict):
         """
-        Initialize the double integrator environment.
+        初始化双积分器环境。
         
-        Args:
-            config: Dictionary containing environment parameters.
-                Required keys:
-                - 'num_agents': Number of agents
-                - 'area_size': Size of the square environment
-                - 'dt': Simulation timestep
-                - 'mass': Mass of each agent
-                - 'car_radius': Radius of each agent (for collision detection)
-                - 'comm_radius': Communication radius (for graph construction)
-                Optional keys:
-                - 'max_steps': Maximum episode length
-                - 'max_force': Maximum force magnitude
-                - 'gradient_decay_rate': Rate at which gradients decay through time
+        参数:
+            config: 包含环境参数的字典。
+                必需键值:
+                - 'num_agents': 智能体数量
+                - 'area_size': 正方形环境大小
+                - 'dt': 仿真时间步长
+                - 'mass': 每个智能体的质量
+                - 'car_radius': 每个智能体的半径（用于碰撞检测）
+                - 'comm_radius': 通信半径（用于图构建）
+                可选键值:
+                - 'max_steps': 最大回合长度
+                - 'max_force': 最大力的大小
+                - 'gradient_decay_rate': 梯度随时间衰减的速率
         """
         super(DoubleIntegratorEnv, self).__init__(config)
         
-        # Store additional parameters
+        # 存储额外参数
         self.mass = config.get('mass', 0.1)
         self.max_force = config.get('max_force', 1.0)
-        self.cbf_alpha = config.get('cbf_alpha', 1.0)  # Default CBF alpha parameter
-        self.pos_dim = 2  # 2D positions (x, y)
-        self.vel_dim = 2  # 2D velocities (vx, vy)
+        self.cbf_alpha = config.get('cbf_alpha', 1.0)  # 默认CBF alpha参数
+        self.pos_dim = 2  # 2D位置 (x, y)
+        self.vel_dim = 2  # 2D速度 (vx, vy)
         self.state_dim = 4  # x, y, vx, vy
         self.action_dim = 2  # fx, fy
         
-        # Gradient decay parameters
+        # 梯度衰减参数
         training_config = config.get('training', {})
         self.gradient_decay_rate = training_config.get('gradient_decay_rate', 0.95)
         self.use_gradient_decay = self.gradient_decay_rate > 0.0
-        self.training = True  # Default to training mode
+        self.training = True  # 默认为训练模式
         
-        # Vision-based observation parameters
+        # 基于视觉的观测参数
         vision_config = config.get('vision', {})
         self.use_vision = vision_config.get('enabled', False)
         
-        # Initialize renderer if vision is enabled
+        # 如果启用视觉则初始化渲染器
         if self.use_vision:
             renderer_config = {
                 'image_size': vision_config.get('image_size', 64),
@@ -75,11 +76,11 @@ class DoubleIntegratorEnv(MultiAgentEnv):
             }
             self.depth_renderer = create_simple_renderer(renderer_config)
         
-        # Register the state transition matrices as buffers
-        # State transition: x_{t+1} = A * x_t + B * u_t
+        # 将状态转换矩阵注册为缓冲区
+        # 状态转换: x_{t+1} = A * x_t + B * u_t
         A = torch.zeros(self.state_dim, self.state_dim)
-        A[0, 0] = 1.0  # x position
-        A[1, 1] = 1.0  # y position
+        A[0, 0] = 1.0  # x位置
+        A[1, 1] = 1.0  # y位置
         A[2, 2] = 1.0  # vx
         A[3, 3] = 1.0  # vy
         A[0, 2] = self.dt  # x += vx * dt
@@ -93,26 +94,26 @@ class DoubleIntegratorEnv(MultiAgentEnv):
 
     @property
     def observation_shape(self) -> Tuple[int, ...]:
-        """Get observation shape: [n_agents, obs_dim] or [n_agents, channels, height, width] for vision"""
+        """获取观测形状: [n_agents, obs_dim] 或视觉模式下的 [n_agents, channels, height, width]"""
         if self.use_vision:
-            # Vision-based: depth images
+            # 基于视觉: 深度图像
             image_size = self.depth_renderer.image_size
-            return (self.num_agents, 1, image_size, image_size)  # Depth images
+            return (self.num_agents, 1, image_size, image_size)  # 深度图像
         else:
-            # State-based observations
+            # 基于状态的观测
             if self.obstacles_config is not None:
-                # Include position (2) and radius (1) of closest obstacle
+                # 包含最近障碍物的位置(2)和半径(1)
                 return (self.num_agents, self.state_dim + self.pos_dim + self.pos_dim + 1)
             else:
-                return (self.num_agents, self.state_dim + self.pos_dim)  # state + goal position
+                return (self.num_agents, self.state_dim + self.pos_dim)  # 状态 + 目标位置
 
     @property
     def action_shape(self) -> Tuple[int, ...]:
-        """Get action shape: [n_agents, action_dim]"""
+        """获取动作形状: [n_agents, action_dim]"""
         return (self.num_agents, self.action_dim)
     
     def get_action_bounds(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get bounds of valid actions."""
+        """获取有效动作的边界。"""
         lower_bound = -self.max_force * torch.ones(self.action_shape, device=self.device)
         upper_bound = self.max_force * torch.ones(self.action_shape, device=self.device)
         return lower_bound, upper_bound
@@ -562,9 +563,9 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         return derivatives
 
     def train(self) -> None:
-        """Set environment to training mode. This enables gradient decay."""
+        """将环境设置为训练模式。这会启用梯度衰减。"""
         self.training = True
     
     def eval(self) -> None:
-        """Set environment to evaluation mode. This disables gradient decay."""
+        """将环境设置为评估模式。这会禁用梯度衰减。"""
         self.training = False

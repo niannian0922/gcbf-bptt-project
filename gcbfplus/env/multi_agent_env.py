@@ -10,7 +10,7 @@ from .base_env import BaseEnv, EnvState, StepResult
 
 @dataclass
 class MultiAgentState(EnvState):
-    """Container for multi-agent environment state information."""
+    """多智能体环境状态信息的容器。"""
     positions: torch.Tensor                  # Shape: [batch_size, n_agents, pos_dim]
     velocities: torch.Tensor                 # Shape: [batch_size, n_agents, vel_dim]
     goals: torch.Tensor                      # Shape: [batch_size, n_agents, pos_dim]
@@ -29,7 +29,7 @@ class MultiAgentState(EnvState):
     
     @property
     def state_tensor(self) -> torch.Tensor:
-        """Create a combined state tensor for all agents."""
+        """为所有智能体创建组合状态张量。"""
         if self.orientations is not None:
             # Include orientations in state
             return torch.cat([

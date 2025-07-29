@@ -41,7 +41,7 @@ def concat_at_front(arr1: jnp.ndarray, arr2: jnp.ndarray, axis: int) -> jnp.ndar
     :param axis: Which axis for arr2 to concat under.
     :return: (T + 1, nx) with [arr1 arr2]
     """
-    # The shapes of arr1 and arr2 should be the same without the dim at axis for arr1.
+    # arr1和arr2在除了arr1的axis维度外的形状应该相同
     arr2_shape = list(arr2.shape)
     del arr2_shape[axis]
     assert np.all(np.array(arr2_shape) == np.array(arr1.shape))
@@ -125,10 +125,10 @@ class MutablePatchCollection(mcollections.PatchCollection):
 
 
 class CustomTimeElapsedColumn(ProgressColumn):
-    """Renders time elapsed."""
+    """渲染已用时间。"""
 
     def render(self, task: "Task") -> Text:
-        """Show time elapsed."""
+        """显示已用时间。"""
         elapsed = task.finished_time if task.finished else task.elapsed
         if elapsed is None:
             return Text("-:--:--", style="progress.elapsed")

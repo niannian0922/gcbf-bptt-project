@@ -7,13 +7,13 @@ import numpy as np
 from tqdm import tqdm
 from typing import Dict, Any, Optional, Tuple, List, Union, Callable
 
-# Try to import wandb, but make it optional
+# 尝试导入wandb，但设为可选
 try:
     import wandb
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
-    print("Warning: wandb not found. Training will proceed without logging to wandb.")
+    print("警告：未找到wandb。训练将继续进行，但不会记录到wandb。")
 
 from ..env.base_env import BaseEnv, EnvState
 from ..env.multi_agent_env import MultiAgentEnv, MultiAgentState
@@ -22,11 +22,10 @@ from ..policy.bptt_policy import BPTTPolicy
 
 class BPTTTrainer:
     """
-    A trainer that implements Backpropagation Through Time (BPTT) for end-to-end optimization
-    of both the policy and CBF networks through a differentiable physics simulator.
+    实现时序反向传播（BPTT）的训练器，通过可微分物理仿真器进行策略和CBF网络的端到端优化。
     
-    This trainer eliminates the need for Q-learning, expert policies, and replay buffers
-    by directly optimizing both networks using gradients through the simulator.
+    该训练器通过仿真器的梯度直接优化两个网络，无需Q学习、专家策略和重放缓冲区。
+    支持自适应安全边距（动态Alpha）的创新训练方法。
     """
     
     def __init__(
@@ -38,33 +37,33 @@ class BPTTTrainer:
         config: Optional[Dict[str, Any]] = None
     ):
         """
-        Initialize the BPTT trainer.
+        初始化BPTT训练器。
         
-        Args:
-            env: Differentiable environment instance
-            policy_network: Policy network to train
-            cbf_network: Optional CBF network for safety
-            optimizer: Optional optimizer (will create default if None)
-            config: Configuration dictionary
+        参数:
+            env: 可微分环境实例
+            policy_network: 要训练的策略网络
+            cbf_network: 可选的CBF安全网络
+            optimizer: 可选的优化器（如果为None将创建默认值）
+            config: 配置字典
         """
-        # Store environment and networks
+        # 存储环境和网络
         self.env = env
         self.policy_network = policy_network
         self.cbf_network = cbf_network
         
-        # Get device from policy network
+        # 从策略网络获取设备
         self.device = next(policy_network.parameters()).device
         
-        # Set default configuration if none provided
+        # 如果没有提供配置，则设置默认配置
         self.config = {} if config is None else config
         
-        # Extract parameters from config
+        # 从配置中提取参数
         self.log_dir = self.config.get('log_dir', 'logs/bptt')
         self.run_name = self.config.get('run_name', 'BPTT_Run')
         self.num_agents = self.config.get('num_agents', 8)
         self.area_size = self.config.get('area_size', 1.0)
         
-        # Training parameters
+        # 训练参数
         self.training_steps = self.config.get('training_steps', 10000)
         self.eval_interval = self.config.get('eval_interval', 100)
         self.save_interval = self.config.get('save_interval', 1000)
@@ -72,22 +71,22 @@ class BPTTTrainer:
         self.eval_horizon = self.config.get('eval_horizon', 100)
         self.max_grad_norm = self.config.get('max_grad_norm', 1.0)
         
-        # Loss weights
+        # 损失权重
         self.goal_weight = self.config.get('goal_weight', 1.0)
         self.safety_weight = self.config.get('safety_weight', 10.0)
         self.control_weight = self.config.get('control_weight', 0.1)
-        self.jerk_weight = self.config.get('jerk_weight', 0.05)  # Weight for jerk penalty
-        self.alpha_reg_weight = self.config.get('alpha_reg_weight', 0.01)  # Weight for alpha regularization
+        self.jerk_weight = self.config.get('jerk_weight', 0.05)  # 加速度变化率权重
+        self.alpha_reg_weight = self.config.get('alpha_reg_weight', 0.01)  # Alpha正则化权重
         self.cbf_alpha = self.config.get('cbf_alpha', 1.0)
         
-        # Create directories for logging
+        # 创建日志目录
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
         self.model_dir = os.path.join(self.log_dir, 'models')
         if not os.path.exists(self.model_dir):
             os.makedirs(self.model_dir)
         
-        # Initialize optimizer if not provided
+        # 如果没有提供优化器，则初始化
         if optimizer is None:
             params = list(self.policy_network.parameters())
             if self.cbf_network is not None:
@@ -100,7 +99,7 @@ class BPTTTrainer:
         else:
             self.optimizer = optimizer
         
-        # Initialize learning rate scheduler if specified
+        # 如果指定了学习率调度器，则初始化
         if self.config.get('use_lr_scheduler', False):
             self.scheduler = optim.lr_scheduler.StepLR(
                 self.optimizer,
@@ -112,20 +111,20 @@ class BPTTTrainer:
     
     def initialize_scenario(self, batch_size: int = 1) -> MultiAgentState:
         """
-        Initialize a new scenario with random initial states and goals.
+        初始化一个新的场景，带有随机初始状态和目标。
         
-        Args:
-            batch_size: Number of parallel environments to initialize
+        参数:
+            batch_size: 要初始化的并行环境数量
             
-        Returns:
-            Environment state
+        返回:
+            环境状态
         """
-        # Use the environment's reset method to initialize states
+        # 使用环境的重置方法初始化状态
         return self.env.reset(batch_size=batch_size, randomize=True)
     
     def train(self) -> None:
         """
-        Main training loop implementing BPTT optimization.
+        实现BPTT优化的主训练循环。
         """
         print(f"Starting BPTT training with configuration:")
         print(f"  Run name: {self.run_name}")
@@ -133,26 +132,26 @@ class BPTTTrainer:
         print(f"  Horizon: {self.horizon_length}")
         print(f"  Log dir: {self.log_dir}")
         
-        # Initialize wandb in offline mode
+        # 在离线模式下初始化wandb
         if WANDB_AVAILABLE:
             wandb.init(name=self.run_name, project='gcbf-bptt', dir=self.log_dir, config=self.config, mode="offline")
         
         start_time = time.time()
         
-        # Set environment to training mode to enable gradient decay
+        # 将环境设置为训练模式以启用梯度衰减
         self.env.train()
         
         pbar = tqdm(total=self.training_steps)
         for step in range(self.training_steps):
-            # Train mode
+            # 训练模式
             self.policy_network.train()
             if self.cbf_network is not None:
                 self.cbf_network.train()
             
-            # Zero gradients before each backpropagation pass
+            # 在每次反向传播之前清零梯度
             self.optimizer.zero_grad()
             
-            # Initialize scenario
+            # 初始化场景
             state = self.initialize_scenario()
             
             # BPTT Rollout
@@ -163,71 +162,71 @@ class BPTTTrainer:
             trajectory_costs = []
             safety_losses = []
             
-            # Run forward simulation and collect trajectory data
+            # 运行前向仿真并收集轨迹数据
             current_state = state
             for t in range(self.horizon_length):
-                # Save current state
+                # 保存当前状态
                 trajectory_states.append(current_state)
                 
-                # Get observations from state
+                # 从状态获取观测值
                 observations = self.env.get_observation(current_state)
                 
-                # Move observations to the correct device (CPU or GPU) before feeding to the network
+                # 在将观测值传递给网络之前，将观测值移动到正确的设备（CPU或GPU）
                 observations = observations.to(self.device)
                 actions, alpha = self.policy_network(observations)
                 
-                # Handle case where alpha is None (fixed alpha configuration)
+                # 处理alpha为None的情况（固定alpha配置）
                 if alpha is None:
-                    # Use environment's default alpha value
+                    # 使用环境默认的alpha值
                     batch_size, num_agents = actions.shape[:2]
                     alpha = torch.full((batch_size, num_agents, 1), 
                                      self.env.cbf_alpha, 
                                      device=self.device, 
                                      dtype=actions.dtype)
                 
-                # Store detached copies for backprop later
+                # 存储用于反向传播的分离副本
                 trajectory_actions.append(actions.clone())
                 trajectory_alphas.append(alpha.clone())
                 
-                # Apply safety filter if CBF network is provided
+                # 如果提供了CBF网络，则应用安全过滤
                 if self.cbf_network is not None:
                     cbf_values = self.cbf_network(observations)
                     
-                    # Compute safety loss based on CBF values
-                    # Negative values indicate unsafe states
+                    # 根据CBF值计算安全损失
+                    # 负值表示不安全状态
                     safety_loss = torch.mean(torch.relu(-cbf_values))
                     safety_losses.append(safety_loss)
                 
-                # Take a step in the environment with dynamic alpha
+                # 在环境中使用动态alpha进行一步
                 step_result = self.env.step(current_state, actions, alpha)
                 next_state = step_result.next_state
                 rewards = step_result.reward
                 costs = step_result.cost
                 
-                # Save reward and cost (detach to prevent modification during backprop)
+                # 保存奖励和成本（分离以防止在反向传播期间修改）
                 trajectory_rewards.append(rewards.clone())
                 trajectory_costs.append(costs.clone())
                 
-                # Update current state for next iteration (detach to prevent inplace modifications)
+                # 更新当前状态以进行下一次迭代（分离以防止就地修改）
                 current_state = next_state
             
-            # Compute losses
+            # 计算损失
             
-            # Goal reaching loss (using rewards)
+            # 目标到达损失（使用奖励）
             if trajectory_rewards:
                 stacked_rewards = torch.stack(trajectory_rewards)
                 goal_loss = -torch.mean(stacked_rewards)
             else:
-                # Fallback: Use distance to goal
+                # 回退：使用到目标的距离
                 goal_distances = self.env.get_goal_distance(current_state)
                 goal_loss = torch.mean(goal_distances)
             
-            # Control effort loss
+            # 控制努力损失
             stacked_actions = torch.stack(trajectory_actions)
             control_effort = torch.mean(stacked_actions ** 2)
             
-            # Jerk loss (rate of change of acceleration)
-            # Calculate differences between consecutive actions
+            # 加速度变化率损失（加速度变化率）
+            # 计算连续动作之间的差异
             jerk_loss = 0.0
             if len(trajectory_actions) > 1:
                 action_diffs = []
@@ -238,47 +237,47 @@ class BPTTTrainer:
                     stacked_diffs = torch.stack(action_diffs)
                     jerk_loss = torch.mean(stacked_diffs ** 2)
             
-            # Safety loss
+            # 安全损失
             if safety_losses:
                 stacked_safety = torch.stack(safety_losses)
                 total_safety_loss = torch.mean(stacked_safety)
             else:
-                # If no CBF network, use environment costs
+                # 如果没有CBF网络，则使用环境成本
                 stacked_costs = torch.stack(trajectory_costs)
                 total_safety_loss = torch.mean(stacked_costs)
             
-            # Alpha regularization loss (encourage smaller alpha values for efficiency)
+            # Alpha正则化损失（鼓励更小的alpha值以提高效率）
             stacked_alphas = torch.stack(trajectory_alphas)
             alpha_regularization_loss = torch.mean(stacked_alphas)
             
-            # Compute total loss as weighted sum
+            # 计算总损失作为加权和
             total_loss = (
                 self.goal_weight * goal_loss +
                 self.safety_weight * total_safety_loss +
                 self.control_weight * control_effort +
-                self.jerk_weight * jerk_loss +  # Add jerk penalty
-                self.alpha_reg_weight * alpha_regularization_loss  # Add alpha regularization
+                self.jerk_weight * jerk_loss +  # 添加加速度变化率惩罚
+                self.alpha_reg_weight * alpha_regularization_loss  # 添加Alpha正则化
             )
             
-            # Backpropagate loss through the entire computation graph
-            # Always use retain_graph=True for BPTT to prevent issues with the computation graph
+            # 通过整个计算图反向传播损失
+            # 始终使用retain_graph=True进行BPTT以防止计算图问题
             total_loss.backward(retain_graph=True)
             
-            # Clip gradients to prevent exploding gradients
+            # 剪辑梯度以防止梯度爆炸
             parameters = list(self.policy_network.parameters())
             if self.cbf_network is not None:
                 parameters += list(self.cbf_network.parameters())
                 
             torch.nn.utils.clip_grad_norm_(parameters, self.max_grad_norm)
             
-            # Update parameters
+            # 更新参数
             self.optimizer.step()
             
-            # Update learning rate if scheduler is enabled
+            # 如果启用了调度器，则更新学习率
             if self.scheduler is not None:
                 self.scheduler.step()
             
-            # Compute metrics for logging
+            # 计算日志指标
             metrics = {
                 "train/total_loss": total_loss.item(),
                 "train/goal_loss": goal_loss.item(),
@@ -291,17 +290,17 @@ class BPTTTrainer:
                 "step": step,
             }
             
-            # Log metrics
+            # 记录指标
             if WANDB_AVAILABLE:
                 wandb.log(metrics)
             
-            # Evaluation and model saving
+            # 评估和模型保存
             if (step + 1) % self.eval_interval == 0:
                 eval_metrics = self.evaluate()
                 if WANDB_AVAILABLE:
                     wandb.log(eval_metrics)
                 
-                # Print progress
+                # 打印进度
                 time_elapsed = time.time() - start_time
                 print(f"\nStep {step+1}/{self.training_steps}, Time: {time_elapsed:.2f}s")
                 print(f"  Total Loss: {total_loss.item():.4f}")
@@ -314,7 +313,7 @@ class BPTTTrainer:
                 print(f"  Evaluation Success Rate: {eval_metrics['eval/success_rate']:.2f}")
                 print(f"  Evaluation Collision Rate: {eval_metrics['eval/collision_rate']:.2f}")
             
-            # Save models
+            # 保存模型
             if (step + 1) % self.save_interval == 0:
                 self.save_models(step + 1)
             
@@ -323,10 +322,10 @@ class BPTTTrainer:
         pbar.close()
         print("Training completed.")
         
-        # Save final models
+        # 保存最终模型
         self.save_models(self.training_steps)
         
-        # Final evaluation
+        # 最终评估
         final_metrics = self.evaluate(num_episodes=20)
         print("\nFinal Evaluation Results:")
         print(f"  Success Rate: {final_metrics['eval/success_rate']:.2f}")
@@ -337,106 +336,106 @@ class BPTTTrainer:
     
     def evaluate(self, num_episodes: int = 10) -> Dict[str, float]:
         """
-        Evaluate the current policy and CBF networks.
+        评估当前策略和CBF网络。
         
-        Args:
-            num_episodes: Number of episodes to evaluate
+        参数:
+            num_episodes: 评估的剧集数量
             
-        Returns:
-            Dictionary of evaluation metrics
+        返回:
+            评估指标字典
         """
         success_count = 0
         collision_count = 0
         avg_goal_distance = 0
         avg_min_cbf = float('inf')
         
-        # Set networks and environment to evaluation mode
+        # 将网络和环境设置为评估模式
         self.policy_network.eval()
         if self.cbf_network is not None:
             self.cbf_network.eval()
         
-        # Set environment to eval mode (disables gradient decay)
+        # 将环境设置为评估模式（禁用梯度衰减）
         if hasattr(self.env, 'eval'):
             self.env.eval()
         
         for _ in range(num_episodes):
-            # Initialize scenario
+            # 初始化场景
             state = self.initialize_scenario()
             
-            # Run episode without gradient tracking
+            # 运行剧集，不跟踪梯度
             with torch.no_grad():
-                # Reset environment
+                # 重置环境
                 current_state = state
                 
-                # Run forward simulation
+                # 运行前向仿真
                 for _ in range(self.eval_horizon):
-                    # Get observations
+                    # 获取观测值
                     observations = self.env.get_observation(current_state)
                     
-                    # Move observations to the correct device (CPU or GPU) before feeding to the network
+                    # 在将观测值传递给网络之前，将观测值移动到正确的设备（CPU或GPU）
                     observations = observations.to(self.device)
                     
-                    # Get CBF values if available
+                    # 如果提供了CBF网络，则获取CBF值
                     if self.cbf_network is not None:
                         cbf_values = self.cbf_network(observations)
                         min_cbf_val = cbf_values.min().item()
                         avg_min_cbf = min(avg_min_cbf, min_cbf_val)
                     
-                    # Get actions and alpha from policy network
+                    # 从策略网络获取动作和alpha
                     actions, alpha = self.policy_network(observations)
                     
-                    # Handle case where alpha is None (fixed alpha configuration)
+                    # 处理alpha为None的情况（固定alpha配置）
                     if alpha is None:
-                        # Use environment's default alpha value
+                        # 使用环境默认的alpha值
                         batch_size, num_agents = actions.shape[:2]
                         alpha = torch.full((batch_size, num_agents, 1), 
                                          self.env.cbf_alpha, 
                                          device=self.device, 
                                          dtype=actions.dtype)
                     
-                    # Step simulation with dynamic alpha
+                    # 在环境中使用动态alpha进行一步
                     step_result = self.env.step(current_state, actions, alpha)
                     next_state = step_result.next_state
                     
-                    # Check for collisions
+                    # 检查是否发生碰撞
                     if torch.any(step_result.cost > 0):
                         collision_count += 1
                         break
                     
-                    # Update state
+                    # 更新状态
                     current_state = next_state
                 
-                # Check if goals are reached (use goal distance from environment)
+                # 检查是否达到目标（使用环境的目标距离）
                 goal_distances = self.env.get_goal_distance(current_state)
                 avg_distance = goal_distances.mean().item()
                 avg_goal_distance += avg_distance
                 
-                # Count as success if all agents are close to their goals
+                # 如果所有代理都接近其目标，则计为成功
                 if torch.all(goal_distances < self.env.agent_radius * 2):
                     success_count += 1
         
-        # Set networks and environment back to training mode
+        # 将网络和环境设置回训练模式
         self.policy_network.train()
         if self.cbf_network is not None:
             self.cbf_network.train()
             
-        # Set environment back to training mode
+        # 将环境设置回训练模式
         if hasattr(self.env, 'train'):
             self.env.train()
         
-        # Compute average metrics
+        # 计算平均指标
         success_rate = success_count / num_episodes
         collision_rate = collision_count / num_episodes
         avg_goal_distance /= num_episodes
         
-        # Prepare evaluation metrics
+        # 准备评估指标
         metrics = {
             "eval/success_rate": success_rate,
             "eval/collision_rate": collision_rate,
             "eval/avg_goal_distance": avg_goal_distance,
         }
         
-        # Add CBF metrics if available
+        # 如果提供了CBF网络，则添加CBF指标
         if self.cbf_network is not None and avg_min_cbf != float('inf'):
             metrics["eval/avg_min_cbf"] = avg_min_cbf
         
@@ -444,29 +443,29 @@ class BPTTTrainer:
     
     def save_models(self, step: int) -> None:
         """
-        Save the policy and CBF network models.
+        保存策略和CBF网络模型。
         
-        Args:
-            step: Current training step
+        参数:
+            step: 当前训练步数
         """
         step_dir = os.path.join(self.model_dir, str(step))
         if not os.path.exists(step_dir):
             os.makedirs(step_dir)
         
-        # Save policy network
+        # 保存策略网络
         policy_path = os.path.join(step_dir, "policy.pt")
         torch.save(self.policy_network.state_dict(), policy_path)
         
-        # Save CBF network if available
+        # 如果提供了CBF网络，则保存
         if self.cbf_network is not None:
             cbf_path = os.path.join(step_dir, "cbf.pt")
             torch.save(self.cbf_network.state_dict(), cbf_path)
         
-        # Save optimizer state
+        # 保存优化器状态
         optim_path = os.path.join(step_dir, "optimizer.pt")
         torch.save(self.optimizer.state_dict(), optim_path)
         
-        # Save configuration
+        # 保存配置
         config_path = os.path.join(step_dir, "config.pt")
         torch.save(self.config, config_path)
         
@@ -474,30 +473,30 @@ class BPTTTrainer:
     
     def load_models(self, step: int) -> None:
         """
-        Load the policy and CBF network models.
+        加载策略和CBF网络模型。
         
-        Args:
-            step: Training step to load from
+        参数:
+            step: 要加载的训练步数
         """
         step_dir = os.path.join(self.model_dir, str(step))
         
         if not os.path.exists(step_dir):
             raise FileNotFoundError(f"No saved models found at step {step}")
         
-        # Load policy network
+        # 加载策略网络
         policy_path = os.path.join(step_dir, "policy.pt")
         if os.path.exists(policy_path):
             self.policy_network.load_state_dict(torch.load(policy_path))
             print(f"Policy network loaded from {policy_path}")
         
-        # Load CBF network if available
+        # 如果提供了CBF网络，则加载
         if self.cbf_network is not None:
             cbf_path = os.path.join(step_dir, "cbf.pt")
             if os.path.exists(cbf_path):
                 self.cbf_network.load_state_dict(torch.load(cbf_path))
                 print(f"CBF network loaded from {cbf_path}")
         
-        # Load optimizer state
+        # 加载优化器状态
         optim_path = os.path.join(step_dir, "optimizer.pt")
         if os.path.exists(optim_path):
             self.optimizer.load_state_dict(torch.load(optim_path))

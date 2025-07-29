@@ -5,105 +5,106 @@ from typing import Any
 
 class GDecay(torch.autograd.Function):
     """
-    Temporal Gradient Decay (GDecay) autograd function.
+    梯度衰减函数，用于BPTT中的梯度稳定。
     
-    This function implements gradient decay for stabilizing long-horizon BPTT training.
-    The forward pass simply returns the input tensor unchanged, but the backward pass
-    multiplies the incoming gradient by a decay factor to prevent gradient explosion
-    in recurrent computations.
-    
-    Reference: Based on the diffphysdrone implementation for stabilizing differentiable
-    physics simulations with long rollouts.
+    在前向传播中保持输入不变，在后向传播中应用衰减因子，
+    这有助于防止在长时间范围内的梯度爆炸或消失。
     """
     
     @staticmethod
-    def forward(ctx: Any, input_tensor: torch.Tensor, decay_factor: float) -> torch.Tensor:
+    def forward(ctx, input_tensor, decay_factor):
         """
-        Forward pass: simply return the input tensor unchanged.
+        前向传播：简单地返回输入张量。
         
-        Args:
-            ctx: Context object to save information for backward pass
-            input_tensor: Input tensor to apply decay to
-            decay_factor: Decay factor for gradient (saved for backward pass)
+        参数:
+            input_tensor: 输入张量
+            decay_factor: 梯度衰减因子（0-1之间）
             
-        Returns:
-            The input tensor unchanged
+        返回:
+            未修改的输入张量
         """
-        # Save the decay factor for the backward pass
-        ctx.decay_factor = decay_factor
+        # 为后向传播保存衰减因子
+        ctx.save_for_backward(decay_factor)
         return input_tensor
     
     @staticmethod
-    def backward(ctx: Any, grad_output: torch.Tensor) -> tuple:
+    def backward(ctx, grad_output):
         """
-        Backward pass: multiply the incoming gradient by the decay factor.
+        后向传播：对梯度应用衰减因子。
         
-        Args:
-            ctx: Context object containing saved information from forward pass
-            grad_output: Gradient flowing backward from the next layer
+        参数:
+            grad_output: 来自上游的梯度
             
-        Returns:
-            Tuple of gradients for each input argument (input_tensor, decay_factor)
-            Only the input_tensor gradient is meaningful; decay_factor gets None
+        返回:
+            衰减后的梯度元组
         """
-        # Apply decay to the gradient
-        decayed_grad = grad_output * ctx.decay_factor
+        decay_factor, = ctx.saved_tensors
         
-        # Return gradients for (input_tensor, decay_factor)
-        # decay_factor doesn't need gradients, so return None for it
+        # 对梯度应用衰减
+        decayed_grad = grad_output * decay_factor
+        
+        # 返回(input_tensor, decay_factor)的梯度
+        # decay_factor不需要梯度，因此返回None
         return decayed_grad, None
 
 
-def g_decay(input_tensor: torch.Tensor, decay_factor: float) -> torch.Tensor:
+def apply_gradient_decay(input_tensor: torch.Tensor, decay_factor: torch.Tensor) -> torch.Tensor:
     """
-    Convenience function to apply temporal gradient decay.
+    应用梯度衰减到输入张量。
     
-    This function applies the GDecay autograd function to stabilize gradients
-    during backpropagation through time in differentiable physics simulations.
+    这是GDecay.apply的便捷包装函数。
     
-    Args:
-        input_tensor: Tensor to apply gradient decay to
-        decay_factor: Factor to multiply gradients by (should be < 1.0 for decay)
+    参数:
+        input_tensor: 要应用衰减的张量
+        decay_factor: 衰减因子（0-1之间的标量或张量）
         
-    Returns:
-        Tensor with gradient decay applied (forward pass unchanged)
+    返回:
+        在前向传播中不变的张量，但在后向传播中梯度被衰减
         
-    Example:
-        >>> import torch
-        >>> x = torch.randn(10, 3, requires_grad=True)
+    示例:
+        >>> x = torch.randn(10, requires_grad=True)
         >>> decay_rate = 0.9
-        >>> x_decayed = g_decay(x, decay_rate)
-        >>> # x_decayed is identical to x in forward pass
-        >>> # but gradients flowing to x will be multiplied by decay_rate
+        >>> x_decayed = apply_gradient_decay(x, torch.tensor(decay_rate))
+        >>> # x_decayed在前向传播中与x相同
+        >>> # 但流向x的梯度将被乘以decay_rate
     """
     return GDecay.apply(input_tensor, decay_factor)
 
 
-def apply_temporal_decay(
-    tensor: torch.Tensor, 
-    decay_rate: float, 
-    dt: float,
+def temporal_gradient_decay(
+    input_tensor: torch.Tensor, 
+    time_step: int, 
+    horizon: int, 
+    decay_rate: float = 0.95,
     training: bool = True
 ) -> torch.Tensor:
     """
-    Apply temporal gradient decay with time-step scaling.
+    根据时间步长应用时间相关的梯度衰减。
     
-    This function combines the decay rate with the simulation time step to create
-    a time-scaled decay factor, and only applies decay during training.
+    在BPTT训练中，较早的时间步长获得更强的衰减，
+    这有助于稳定长期依赖关系的学习。
     
-    Args:
-        tensor: Input tensor to apply decay to
-        decay_rate: Base decay rate (typically 0.9-0.99)
-        dt: Simulation time step
-        training: Whether we're in training mode (decay only applied if True)
+    参数:
+        input_tensor: 输入张量
+        time_step: 当前时间步长（0为第一个）
+        horizon: 总时间范围长度
+        decay_rate: 基础衰减率
+        training: 是否处于训练模式
         
-    Returns:
-        Tensor with or without gradient decay applied
+    返回:
+        应用了时间相关衰减的张量
     """
-    if training and decay_rate > 0.0:
-        # Calculate time-scaled decay factor
-        decay_factor = decay_rate ** dt
-        return g_decay(tensor, decay_factor)
-    else:
-        # No decay during evaluation or if decay_rate is 0
-        return tensor 
+    if not training:
+        return input_tensor
+    
+    # 计算时间缩放的衰减因子
+    # 较早的时间步长（较小的time_step）获得更强的衰减
+    time_factor = (horizon - time_step) / horizon
+    effective_decay = decay_rate ** time_factor
+    
+    # 评估期间或如果decay_rate为0则无衰减
+    if not training or decay_rate == 0.0:
+        return input_tensor
+    
+    decay_tensor = torch.tensor(effective_decay, device=input_tensor.device)
+    return apply_gradient_decay(input_tensor, decay_tensor) 

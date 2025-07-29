@@ -1,170 +1,177 @@
-<div align="center">
+基于可微分物理的多智能体安全敏捷协同策略研究
 
-# GCBF+
+核心创新理念
 
-[![Paper](https://img.shields.io/badge/T--RO-Accepted-success)](https://mit-realm.github.io/gcbfplus-website/)
+本项目融合了图控制屏障函数（GCBF）的安全性与时序反向传播（BPTT）的性能优势，提出了自适应安全边距的创新方法。通过端到端的可微分物理仿真，我们实现了既安全又敏捷的多智能体协同导航，无需传统强化学习中的Q学习、专家策略或重放缓冲区。
 
-Jax Official Implementation of T-RO Paper: [Songyuan Zhang*](https://syzhang092218-source.github.io), [Oswin So*](https://oswinso.xyz/), [Kunal Garg](https://kunalgarg.mit.edu/), and [Chuchu Fan](https://chuchu.mit.edu): "[GCBF+: A Neural Graph Control Barrier Function Framework for Distributed Safe Multi-Agent Control](https://mit-realm.github.io/gcbfplus-website/)". 
+核心技术特色
 
-[Dependencies](#Dependencies) •
-[Installation](#Installation) •
-[Run](#Run)
+自适应安全边距
+创新点：策略网络动态预测CBF安全参数α，而非使用固定值
+优势：根据环境复杂度和智能体状态自适应调整安全边距
+实现：通过Softplus激活函数确保α值始终为正，配合正则化损失引导学习
 
-</div>
+时序反向传播优化
+方法：直接通过可微分仿真器优化策略和CBF网络
+特点：支持时序梯度衰减（GDecay）机制稳定长时域训练
+效果：消除了传统RL方法的复杂性，实现端到端学习
 
-A much improved version of [GCBFv0](https://mit-realm.github.io/gcbf-website/)!
+性能增强技术
+加速度变化率惩罚**：平滑动作输出，提升控制品质
+视觉导航支持**：CRNN架构处理深度图像输入
+瓶颈场景专项优化**：针对复杂协调场景的专门评估指标
 
-<div align="center">
-    <img src="./media/cbf1.gif" alt="LidarSpread" width="24.55%"/>
-    <img src="./media/DoubleIntegrator_512_2x.gif" alt="LidarLine" width="24.55%"/>
-    <img src="./media/Obstacle2D_32.gif" alt="VMASReverseTransport" width="24.55%"/>
-    <img src="./media/Obstacle2D_512_2x.gif" alt="VMASWheel" width="24.55%"/>
-</div>
+实验结果展示
 
-## Dependencies
+动态Alpha自适应导航
+![动态Alpha展示](media/dynamic_alpha_vision.gif)
 
-We recommend to use [CONDA](https://www.anaconda.com/) to install the requirements:
+这展示了我们的动态Alpha策略在复杂障碍物环境中的自适应安全导航能力
 
-```bash
-conda create -n gcbfplus python=3.10
-conda activate gcbfplus
-cd gcbfplus
+环境配置与安装
+ 1. 克隆仓库
+bash
+git clone https://github.com/your-username/gcbf-bptt-project.git
+cd gcbf-bptt-project
+
+
+2. 创建Conda环境
+bash
+conda create -n gcbf-bptt python=3.9
+conda activate gcbf-bptt
+
+ 3. 安装PyTorch（GPU版本）
+bash
+CUDA 11.8版本（根据您的CUDA版本调整）
+conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
-Then install jax following the [official instructions](https://github.com/google/jax#installation), and then install the rest of the dependencies:
+ 4. 安装其他依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-## Installation
-
-Install GCBF: 
-
+5. 验证安装
 ```bash
-pip install -e .
+python -c "import torch; print(f'PyTorch版本: {torch.__version__}'); print(f'CUDA可用: {torch.cuda.is_available()}')"
 ```
 
-## Run
+使用指南
 
-### Environments
+自动化实验运行
 
-We provide 3 2D environments including `SingleIntegrator`, `DoubleIntegrator`, and `DubinsCar`, and 2 3D environments including `LinearDrone` and `CrazyFlie`.
-
-### Algorithms
-
-We provide algorithms including GCBF+ (`gcbf+`), GCBF (`gcbf`), centralized CBF-QP (`centralized_cbf`), and decentralized CBF-QP (`dec_share_cbf`). Use `--algo` to specify the algorithm. 
-
-### Hyper-parameters
-
-To reproduce the results shown in our paper, one can refer to [`settings.yaml`](./settings.yaml).
-
-### Train
-
-To train the model (only GCBF+ and GCBF need training), use:
-
+运行完整的瓶颈场景对比实验：
 ```bash
-python train.py --algo gcbf+ --env DoubleIntegrator -n 8 --area-size 4 --loss-action-coef 1e-4 --n-env-train 16 --lr-actor 1e-5 --lr-cbf 1e-5 --horizon 32
+bash run_experiments.sh
 ```
 
-In our paper, we use 8 agents with 1000 training steps. The training logs will be saved in folder `./logs/<env>/<algo>/seed<seed>_<training-start-time>`. We also provide the following flags:
+此脚本将自动执行：
+- 动态Alpha模型训练（20,000步）
+- 三个固定Alpha基线模型训练
+- 生成可视化结果和量化分析报告
+单独模型训练
 
-- `-n`: number of agents
-- `--env`: environment, including `SingleIntegrator`, `DoubleIntegrator`, `DubinsCar`, `LinearDrone`, and `CrazyFlie`
-- `--algo`: algorithm, including `gcbf`, `gcbf+`
-- `--seed`: random seed
-- `--steps`: number of training steps
-- `--name`: name of the experiment
-- `--debug`: debug mode: no recording, no saving
-- `--obs`: number of obstacles
-- `--n-rays`: number of LiDAR rays
-- `--area-size`: side length of the environment
-- `--n-env-train`: number of environments for training
-- `--n-env-test`: number of environments for testing
-- `--log-dir`: path to save the training logs
-- `--eval-interval`: interval of evaluation
-- `--eval-epi`: number of episodes for evaluation
-- `--save-interval`: interval of saving the model
-
-In addition, use the following flags to specify the hyper-parameters:
-- `--alpha`: GCBF alpha
-- `--horizon`: GCBF+ look forward horizon
-- `--lr-actor`: learning rate of the actor
-- `--lr-cbf`: learning rate of the CBF
-- `--loss-action-coef`: coefficient of the action loss
-- `--loss-h-dot-coef`: coefficient of the h_dot loss
-- `--loss-safe-coef`: coefficient of the safe loss
-- `--loss-unsafe-coef`: coefficient of the unsafe loss
-- `--buffer-size`: size of the replay buffer
-
-### Test
-
-To test the learned model, use:
-
+训练动态Alpha模型：
 ```bash
-python test.py --path <path-to-log> --epi 5 --area-size 4 -n 16 --obs 0
+python train_bptt.py --config config/bottleneck_dynamic_alpha.yaml --env_type double_integrator
 ```
 
-This should report the safety rate, goal reaching rate, and success rate of the learned model, and generate videos of the learned model in `<path-to-log>/videos`. Use the following flags to customize the test:
-
-- `-n`: number of agents
-- `--obs`: number of obstacles
-- `--area-size`: side length of the environment
-- `--max-step`: maximum number of steps for each episode, increase this if you have a large environment
-- `--path`: path to the log folder
-- `--n-rays`: number of LiDAR rays
-- `--alpha`: CBF alpha, used in centralized CBF-QP and decentralized CBF-QP
-- `--max-travel`: maximum travel distance of agents
-- `--cbf`: plot the CBF contour of this agent, only support 2D environments
-- `--seed`: random seed
-- `--debug`: debug mode
-- `--cpu`: use CPU
-- `--u-ref`: test the nominal controller
-- `--env`: test environment (not needed if the log folder is specified)
-- `--algo`: test algorithm (not needed if the log folder is specified)
-- `--step`: test step (not needed if testing the last saved model)
-- `--epi`: number of episodes to test
-- `--offset`: offset of the random seeds
-- `--no-video`: do not generate videos
-- `--log`: log the results to a file
-- `--dpi`: dpi of the video
-- `--nojit-rollout`: do not use jit to speed up the rollout, used for large-scale tests
-
-To test the nominal controller, use:
-
+训练固定Alpha基线：
 ```bash
-python test.py --env SingleIntegrator -n 16 --u-ref --epi 1 --area-size 4 --obs 0
+python train_bptt.py --config config/bottleneck_fixed_alpha_medium.yaml --env_type double_integrator
 ```
 
-To test the CBF-QPs, use:
+结果可视化
 
+生成训练结果的可视化：
 ```bash
-python test.py --env SingleIntegrator -n 16 --algo dec_share_cbf --epi 1 --area-size 4 --obs 0 --alpha 1
+python visualize_bptt.py --model_dir logs/bptt --env_type double_integrator
 ```
 
-### Pre-trained models
+配置文件说明
 
-We provide pre-trained models in folder [`pretrained`](pretrained). However, their performance may depend on the GPU/CUDA/Jax versions. We highly recommend retraining a model yourself.
+`config/bottleneck_dynamic_alpha.yaml`: 动态Alpha瓶颈实验配置
+`config/bottleneck_fixed_alpha_*.yaml`: 固定Alpha基线配置
+ `config/bptt_config.yaml`: 标准BPTT训练配置
 
-## Citation
+项目结构
 
-```
-@ARTICLE{zhang2025gcbf+,
-      author={Zhang, Songyuan and So, Oswin and Garg, Kunal and Fan, Chuchu},
-      journal={IEEE Transactions on Robotics}, 
-      title={{GCBF}+: A Neural Graph Control Barrier Function Framework for Distributed Safe Multiagent Control}, 
-      year={2025},
-      volume={41},
-      pages={1533-1552},
-      doi={10.1109/TRO.2025.3530348}
+gcbf-bptt-project/
+├── gcbfplus/                    # 核心代码库
+│   ├── policy/                  # 策略网络实现
+│   │   └── bptt_policy.py      # BPTT策略（支持动态Alpha）
+│   ├── trainer/                 # 训练器模块
+│   │   ├── bptt_trainer.py     # 主训练器
+│   │   └── bottleneck_metrics.py # 瓶颈场景评估指标
+│   ├── env/                     # 环境实现
+│   │   ├── double_integrator.py # 双积分器环境
+│   │   ├── multi_agent_env.py  # 多智能体基础环境
+│   │   └── gcbf_safety_layer.py # GCBF安全层
+│   └── utils/                   # 工具模块
+│       └── autograd.py         # 梯度衰减实现
+├── config/                      # 配置文件
+├── logs/                        # 训练日志和模型
+├── media/                       # 实验结果展示
+└── requirements.txt             # 依赖列表
+
+
+核心评估指标
+
+基础性能指标
+成功率：智能体到达目标的百分比
+碰撞率：发生碰撞的频率
+平均目标距离：最终状态与目标的平均距离
+最小CBF值：安全约束的严格程度
+
+瓶颈场景专项指标
+吞吐量：每秒通过瓶颈的智能体数量
+速度波动：瓶颈区域内速度标准差
+总等待时间：低速状态的累计时间
+-协调效：基于流畅度和吞吐量的综合评分
+
+技术路线图
+已完成功能 ✅
+基础BPTT训练框架
+自适应安全边距（动态Alpha）
+时序梯度衰减机制
+加速度变化率惩罚
+视觉导航支持（CRNN架构）
+瓶颈场景专项评估
+
+未来发展方向 
+更复杂的3D导航场景
+异构智能体支持
+分布式训练优化
+实际机器人平台验证
+
+学术贡献
+
+1. 方法创新：首次提出策略网络动态预测CBF安全参数的方法
+2. 技术融合：将GCBF安全保证与BPTT端到端优化有效结合
+3. 性能提升：在保证安全的前提下显著提升多智能体协调效率
+4. 评估体系：建立了瓶颈场景下的专项协调评估指标
+
+ 引用
+
+如果您在研究中使用了本项目，请引用：
+
+```bibtex
+@misc{gcbf-bptt-dynamic-alpha,
+  title={基于可微分物理的多智能体安全敏捷协同策略研究},
+  author={Your Name},
+  year={2024},
+  howpublished={\url{https://github.com/niannian0922/gcbf-bptt-project}}
 }
 ```
 
-## Acknowledgement
+许可证
 
-The developers were partially supported by MITRE during the project.
+本项目采用MIT许可证 - 详见 [LICENSE](LICENSE) 文件。
 
-© 2024 MIT
+联系方式
 
-© 2024 The MITRE Corporation
-# gcbf-bptt-project
-# gcbf-bptt-project
+如有技术问题或学术讨论，欢迎联系：
+ 邮箱：jihaoye0922@gmail.com
+ 项目主页：https://github.com/your-username/gcbf-bptt-project
+
+ 

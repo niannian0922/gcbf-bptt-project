@@ -8,13 +8,13 @@ from dataclasses import dataclass
 
 @dataclass
 class EnvState:
-    """Base data class for storing environment state information."""
+    """用于存储环境状态信息的基础数据类。"""
     pass
 
 
 @dataclass
 class StepResult:
-    """Container for the results of an environment step."""
+    """环境步骤结果的容器。"""
     next_state: EnvState
     reward: torch.Tensor
     cost: torch.Tensor  # For safety constraint violations
@@ -43,7 +43,7 @@ class BaseEnv(nn.Module, ABC):
     
     @property
     def device(self) -> torch.device:
-        """Get the device on which the environment tensors are stored."""
+        """获取环境张量存储的设备。"""
         return next(self.parameters()).device if list(self.parameters()) else torch.device('cpu')
     
     @abstractmethod

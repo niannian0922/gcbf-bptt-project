@@ -40,7 +40,7 @@ class Trainer:
         if Trainer._check_params(params):
             self.params = params
 
-        # make dir for the models
+        # 为模型创建目录
         if save_log:
             if not os.path.exists(log_dir):
                 os.mkdir(log_dir)
@@ -74,10 +74,10 @@ class Trainer:
         return True
 
     def train(self):
-        # record start time
+        # 记录开始时间
         start_time = time()
 
-        # preprocess the rollout function
+        # 预处理rollout函数
         def rollout_fn_single(params, key):
             return rollout(self.env, ft.partial(self.algo.step, params=params), key)
 
@@ -86,7 +86,7 @@ class Trainer:
 
         rollout_fn = jax.jit(rollout_fn)
 
-        # preprocess the test function
+        # 预处理测试函数
         def test_fn_single(params, key):
             return rollout(self.env_test, lambda graph, k: (self.algo.act(graph, params), None), key)
 
@@ -95,13 +95,13 @@ class Trainer:
 
         test_fn = jax.jit(test_fn)
 
-        # start training
+        # 开始训练
         test_key = jr.PRNGKey(self.seed)
         test_keys = jr.split(test_key, 1_000)[:self.n_env_test]
 
         pbar = tqdm(total=self.steps, ncols=80)
         for step in range(0, self.steps + 1):
-            # evaluate the algorithm
+            # 评估算法
             if step % self.eval_interval == 0:
                 test_rollouts: Rollout = test_fn(self.algo.actor_params, test_keys)
                 total_reward = test_rollouts.rewards.sum(axis=-1)
@@ -130,12 +130,12 @@ class Trainer:
                 if self.save_log and step % self.save_interval == 0:
                     self.algo.save(os.path.join(self.model_dir), step)
 
-            # collect rollouts
+            # 收集rollouts
             key_x0, self.key = jax.random.split(self.key)
             key_x0 = jax.random.split(key_x0, self.n_env_train)
             rollouts: Rollout = rollout_fn(self.algo.actor_params, key_x0)
 
-            # update the algorithm
+            # 更新算法
             update_info = self.algo.update(rollouts, step)
             wandb.log(update_info, step=self.update_steps)
             self.update_steps += 1
