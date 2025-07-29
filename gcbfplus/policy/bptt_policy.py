@@ -278,27 +278,28 @@ class PolicyHeadModule(nn.Module):
                 - 'output_activation': Output activation function name
                 - 'action_scaling': Whether to scale actions to a specific range
                 - 'action_bound': Bound for action scaling (if used)
+                - 'predict_alpha': Whether to predict alpha values (default: True)
         """
         super(PolicyHeadModule, self).__init__()
         
-        # Extract configuration parameters
         input_dim = config.get('input_dim', 64)
         output_dim = config.get('output_dim', 2)
         hidden_dims = config.get('hidden_dims', [64])
         activation = config.get('activation', 'relu')
-        output_activation = config.get('output_activation', 'tanh')
-        self.action_scaling = config.get('action_scaling', True)
+        output_activation = config.get('output_activation', 'identity')
+        self.action_scaling = config.get('action_scaling', False)
         self.action_bound = config.get('action_bound', 1.0)
+        self.predict_alpha = config.get('predict_alpha', True)  # New configuration option
         
-        # Select activation functions
+        # Set up activation function
         if activation == 'relu':
             self.activation = nn.ReLU()
-        elif activation == 'leaky_relu':
-            self.activation = nn.LeakyReLU(0.05)
         elif activation == 'tanh':
             self.activation = nn.Tanh()
+        elif activation == 'sigmoid':
+            self.activation = nn.Sigmoid()
         else:
-            self.activation = nn.ReLU()
+            self.activation = nn.ReLU()  # Default
             
         if output_activation == 'tanh':
             self.output_activation = nn.Tanh()
@@ -322,20 +323,23 @@ class PolicyHeadModule(nn.Module):
         
         self.action_network = nn.Sequential(*action_layers)
         
-        # Build alpha prediction MLP (smaller network for efficiency)
-        alpha_hidden_dim = hidden_dims[0] // 2 if hidden_dims else 32  # Smaller network
-        self.alpha_network = nn.Sequential(
-            nn.Linear(input_dim, alpha_hidden_dim),
-            self.activation,
-            nn.Linear(alpha_hidden_dim, 1),  # Predict single alpha per agent
-            nn.Softplus()  # Ensure alpha > 0
-        )
+        # Build alpha prediction MLP only if predict_alpha is True
+        if self.predict_alpha:
+            alpha_hidden_dim = config.get('alpha_hidden_dim', hidden_dims[0] // 2 if hidden_dims else 32)
+            self.alpha_network = nn.Sequential(
+                nn.Linear(input_dim, alpha_hidden_dim),
+                self.activation,
+                nn.Linear(alpha_hidden_dim, 1),  # Predict single alpha per agent
+                nn.Softplus()  # Ensure alpha > 0
+            )
+        else:
+            self.alpha_network = None
         
         self.output_dim = output_dim
     
     def forward(self, x: torch.Tensor) -> tuple:
         """
-        Generate actions and alpha values from features.
+        Generate actions and optionally alpha values from features.
         
         Args:
             x: Input features [batch_size, input_dim] or [batch_size, n_agents, input_dim]
@@ -344,6 +348,7 @@ class PolicyHeadModule(nn.Module):
             Tuple of (actions, alpha) where:
             - actions: [batch_size, output_dim] or [batch_size, n_agents, output_dim]
             - alpha: [batch_size, 1] or [batch_size, n_agents, 1] - CBF safety parameter
+                     (None if predict_alpha is False)
         """
         original_shape = x.shape
         
@@ -364,12 +369,15 @@ class PolicyHeadModule(nn.Module):
             if self.action_scaling:
                 actions = actions * self.action_bound
             
-            # Process through alpha network
-            alpha = self.alpha_network(x_flat)
-            
-            # Reshape back to [batch_size, n_agents, -1]
+            # Reshape actions back to [batch_size, n_agents, -1]
             actions = actions.view(batch_size, n_agents, -1)
-            alpha = alpha.view(batch_size, n_agents, -1)
+            
+            # Process through alpha network if enabled
+            if self.predict_alpha and self.alpha_network is not None:
+                alpha = self.alpha_network(x_flat)
+                alpha = alpha.view(batch_size, n_agents, -1)
+            else:
+                alpha = None
             
             return actions, alpha
         else:
@@ -381,8 +389,11 @@ class PolicyHeadModule(nn.Module):
             if self.action_scaling:
                 actions = actions * self.action_bound
             
-            # Process through alpha network
-            alpha = self.alpha_network(x)
+            # Process through alpha network if enabled
+            if self.predict_alpha and self.alpha_network is not None:
+                alpha = self.alpha_network(x)
+            else:
+                alpha = None
                 
             return actions, alpha
 

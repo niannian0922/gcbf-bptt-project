@@ -133,6 +133,53 @@ class MultiAgentEnv(BaseEnv):
             center_radius = obstacles_config.get('center_radius', 0.3)
             positions.append([self.area_size/2, self.area_size/2])
             radii.append(center_radius)
+        
+        # Create bottleneck obstacles if specified
+        if obstacles_config.get('bottleneck', False):
+            # Bottleneck configuration parameters
+            gap_width = obstacles_config.get('gap_width', 0.3)
+            wall_thickness = obstacles_config.get('wall_thickness', 0.1)
+            wall_height = obstacles_config.get('wall_height', 0.8)
+            gap_position = obstacles_config.get('gap_position', 0.5)  # 0.5 = center
+            
+            # Create two walls with a gap in the middle
+            # Calculate wall dimensions
+            center_y = self.area_size * gap_position
+            gap_half_width = gap_width / 2
+            wall_half_height = wall_height / 2
+            
+            # Wall positions (center of each wall segment)
+            upper_wall_y = center_y + gap_half_width + wall_half_height
+            lower_wall_y = center_y - gap_half_width - wall_half_height
+            wall_x = self.area_size / 2
+            
+            # Create multiple circular obstacles to form wall segments
+            obstacle_spacing = obstacles_config.get('obstacle_spacing', 0.08)
+            obstacle_radius = obstacles_config.get('obstacle_radius', 0.06)
+            
+            # Upper wall
+            if upper_wall_y - wall_half_height < self.area_size:
+                wall_start = max(upper_wall_y - wall_half_height, center_y + gap_half_width)
+                wall_end = min(upper_wall_y + wall_half_height, self.area_size)
+                
+                num_obstacles = int((wall_end - wall_start) / obstacle_spacing) + 1
+                for i in range(num_obstacles):
+                    y_pos = wall_start + i * obstacle_spacing
+                    if y_pos <= wall_end:
+                        positions.append([wall_x, y_pos])
+                        radii.append(obstacle_radius)
+            
+            # Lower wall  
+            if lower_wall_y + wall_half_height > 0:
+                wall_start = max(lower_wall_y - wall_half_height, 0)
+                wall_end = min(lower_wall_y + wall_half_height, center_y - gap_half_width)
+                
+                num_obstacles = int((wall_end - wall_start) / obstacle_spacing) + 1
+                for i in range(num_obstacles):
+                    y_pos = wall_start + i * obstacle_spacing
+                    if y_pos <= wall_end:
+                        positions.append([wall_x, y_pos])
+                        radii.append(obstacle_radius)
             
         # Convert to tensors
         if positions and radii:

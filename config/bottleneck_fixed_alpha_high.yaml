@@ -1,0 +1,83 @@
+# Bottleneck Environment Configuration for Fixed Alpha (High) Testing
+# This creates a challenging scenario with two walls and a narrow gap
+
+env:
+  area_size: 2.0
+  dt: 0.03
+  mass: 0.1
+  num_agents: 8
+  max_steps: 200
+  agent_radius: 0.05
+  comm_radius: 0.5
+  cbf_alpha: 2.0  # Fixed high alpha
+  obstacles:
+    bottleneck: true
+    gap_width: 0.25        # Narrow gap of 0.25 units
+    wall_thickness: 0.1    # Wall thickness
+    wall_height: 1.6       # Height of each wall segment  
+    gap_position: 0.5      # Gap at center (0.5)
+    obstacle_spacing: 0.08 # Spacing between wall obstacles
+    obstacle_radius: 0.06  # Radius of each wall obstacle
+
+# Network configurations
+networks:
+  policy:
+    type: bptt
+    perception:
+      input_dim: 9  # pos(2) + vel(2) + goal(2) + closest_obstacle(3)
+      hidden_dim: 128
+      num_layers: 3
+      activation: relu
+      use_batch_norm: false
+      vision_enabled: false
+    memory:
+      hidden_dim: 128
+      num_layers: 2
+      input_dim: 128
+    policy_head:
+      hidden_dim: 128
+      activation: relu
+      action_scaling: true
+      output_dim: 2
+      predict_alpha: false  # Fixed alpha, no alpha prediction
+  cbf:
+    hidden_dim: 128
+    edge_dim: 4
+    node_dim: 9
+    n_layers: 3
+    msg_hidden_sizes: [128, 128]
+    update_hidden_sizes: [128, 128]
+    aggr_hidden_sizes: [128]
+
+# Training configuration
+training:
+  name: "Bottleneck_Fixed_Alpha_High"
+  steps: 20000
+  batch_size: 1
+  lr: 0.0003
+  lr_decay: 0.99
+  lr_decay_steps: 1000
+  horizon_length: 80
+  eval_frequency: 1000
+  eval_episodes: 10
+  save_frequency: 5000
+  gradient_decay_rate: 0.95
+  use_wandb: false
+  
+  loss_weights:
+    goal_weight: 1.0
+    safety_weight: 10.0
+    control_weight: 0.1
+    jerk_weight: 0.05
+    # No alpha_reg_weight for fixed alpha
+
+# Environment metrics for bottleneck analysis
+bottleneck_metrics:
+  enabled: true
+  bottleneck_region:
+    x_min: 0.9   # Region around the bottleneck
+    x_max: 1.1
+    y_min: 0.8
+    y_max: 1.2
+  throughput_window: 1.0  # Time window for throughput calculation
+  velocity_threshold: 0.1 # Below this speed = waiting 

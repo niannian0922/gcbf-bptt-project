@@ -4,6 +4,7 @@ import torch
 import yaml
 import argparse
 import numpy as np
+import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -11,6 +12,7 @@ import matplotlib.patches as patches
 
 from gcbfplus.env import DoubleIntegratorEnv, CrazyFlieEnv
 from gcbfplus.policy import BPTTPolicy, create_policy_from_config
+from gcbfplus.trainer.bottleneck_metrics import BottleneckAnalyzer, BottleneckMetrics
 
 
 def visualize_trajectory(env, policy_network, cbf_network, device, config, save_path=None):
@@ -38,6 +40,12 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
     area_size = env.area_size
     car_radius = env.agent_radius
     horizon = config.get('eval_horizon', 100)
+    
+    # Initialize bottleneck analyzer if enabled
+    bottleneck_analyzer = None
+    if config.get('bottleneck_metrics', {}).get('enabled', False):
+        bottleneck_analyzer = BottleneckAnalyzer(config)
+        bottleneck_analyzer.reset()
     
     # Initialize metrics tracking
     time_to_goal = 0
@@ -112,6 +120,15 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
             
             # Store positions for visualization
             all_positions.append(next_state.positions.clone().cpu().numpy())
+            
+            # Update bottleneck analyzer if enabled
+            if bottleneck_analyzer is not None:
+                bottleneck_analyzer.update(
+                    positions=next_state.positions,
+                    velocities=next_state.velocities,
+                    goals=next_state.goals,
+                    time_step=t
+                )
             
             # Check if all agents reached their goals
             distances = env.get_goal_distance(next_state)
@@ -267,6 +284,23 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
         print("WARNING: Collisions detected during simulation!")
     print("="*40)
     
+    # Perform bottleneck analysis if enabled
+    bottleneck_results = None
+    if bottleneck_analyzer is not None:
+        bottleneck_results = bottleneck_analyzer.analyze(agent_radius=car_radius)
+        
+        print("\n" + "="*50)
+        print("          BOTTLENECK COORDINATION ANALYSIS          ")
+        print("="*50)
+        print(f"Throughput: {bottleneck_results.throughput:.3f} agents/sec")
+        print(f"Velocity Fluctuation: {bottleneck_results.velocity_fluctuation:.3f}")
+        print(f"Total Waiting Time: {bottleneck_results.total_waiting_time:.2f} sec")
+        print(f"Avg Bottleneck Time: {bottleneck_results.avg_bottleneck_time:.3f} sec")
+        print(f"Coordination Efficiency: {bottleneck_results.coordination_efficiency:.3f}")
+        print(f"Collision Rate: {bottleneck_results.collision_rate:.4f} collisions/agent/sec")
+        print(f"Completion Rate: {bottleneck_results.completion_rate:.3f}")
+        print("="*50)
+    
     plt.close()
     
     # Return both the animation and metrics
@@ -278,6 +312,18 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
         'collisions_detected': collision_detected,
         'has_obstacles': has_obstacles
     }
+    
+    # Add bottleneck metrics if available
+    if bottleneck_results is not None:
+        metrics.update({
+            'bottleneck_throughput': bottleneck_results.throughput,
+            'bottleneck_velocity_fluctuation': bottleneck_results.velocity_fluctuation,
+            'bottleneck_total_waiting_time': bottleneck_results.total_waiting_time,
+            'bottleneck_avg_bottleneck_time': bottleneck_results.avg_bottleneck_time,
+            'bottleneck_coordination_efficiency': bottleneck_results.coordination_efficiency,
+            'bottleneck_collision_rate': bottleneck_results.collision_rate,
+            'bottleneck_completion_rate': bottleneck_results.completion_rate
+        })
     
     return animation, metrics
 

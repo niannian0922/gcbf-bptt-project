@@ -175,6 +175,16 @@ class BPTTTrainer:
                 # Move observations to the correct device (CPU or GPU) before feeding to the network
                 observations = observations.to(self.device)
                 actions, alpha = self.policy_network(observations)
+                
+                # Handle case where alpha is None (fixed alpha configuration)
+                if alpha is None:
+                    # Use environment's default alpha value
+                    batch_size, num_agents = actions.shape[:2]
+                    alpha = torch.full((batch_size, num_agents, 1), 
+                                     self.env.cbf_alpha, 
+                                     device=self.device, 
+                                     dtype=actions.dtype)
+                
                 # Store detached copies for backprop later
                 trajectory_actions.append(actions.clone())
                 trajectory_alphas.append(alpha.clone())
@@ -374,6 +384,15 @@ class BPTTTrainer:
                     
                     # Get actions and alpha from policy network
                     actions, alpha = self.policy_network(observations)
+                    
+                    # Handle case where alpha is None (fixed alpha configuration)
+                    if alpha is None:
+                        # Use environment's default alpha value
+                        batch_size, num_agents = actions.shape[:2]
+                        alpha = torch.full((batch_size, num_agents, 1), 
+                                         self.env.cbf_alpha, 
+                                         device=self.device, 
+                                         dtype=actions.dtype)
                     
                     # Step simulation with dynamic alpha
                     step_result = self.env.step(current_state, actions, alpha)
