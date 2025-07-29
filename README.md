@@ -31,7 +31,7 @@
 环境配置与安装
  1. 克隆仓库
 bash
-git clone https://github.com/your-username/gcbf-bptt-project.git
+git clone https://github.com/niannian0922/gcbf-bptt-project.git
 cd gcbf-bptt-project
 
 
@@ -128,8 +128,8 @@ python visualize_bptt.py --model_dir logs/bptt --env_type double_integrator
 ```bibtex
 @misc{gcbf-bptt-dynamic-alpha,
   title={基于可微分物理的多智能体安全敏捷协同策略研究},
-  author={Your Name},
-  year={2024},
+  author={Ji Haoye},
+  year={2025},
   howpublished={\url{https://github.com/niannian0922/gcbf-bptt-project}}
 }
 ```
