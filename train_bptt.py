@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-import os
-import torch
-import yaml
+# -*- coding: utf-8 -*-
+"""
+BPTT多智能体训练脚本 - 支持自适应安全边距和瓶颈场景
+集成端到端优化和动态Alpha机制
+"""
+
 import argparse
+import os
+import random
 import numpy as np
+import torch
+import torch.nn as nn
+import yaml
 from pathlib import Path
 
 from gcbfplus.env import DoubleIntegratorEnv, CrazyFlieEnv
