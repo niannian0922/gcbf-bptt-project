@@ -57,3 +57,4 @@ training:
   safety_weight: 10.0             # Weight for safety loss (CBF violation)
   control_weight: 0.1             # Weight for control effort loss
   jerk_weight: 0.05               # Weight for jerk penalty (rate of change of action)
+  alpha_reg_weight: 0.01          # Weight for alpha regularization (encourage smaller alpha values)

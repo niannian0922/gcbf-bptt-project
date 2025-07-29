@@ -276,6 +276,7 @@ class GCBFSafetyLayer(nn.Module):
         self, 
         state: MultiAgentState, 
         raw_action: torch.Tensor, 
+        alphas: Optional[torch.Tensor] = None,
         dynamics_fn: Optional[Callable] = None
     ) -> torch.Tensor:
         """
@@ -284,6 +285,7 @@ class GCBFSafetyLayer(nn.Module):
         Args:
             state: Current environment state
             raw_action: Raw actions from policy [batch_size, n_agents, action_dim]
+            alphas: Dynamic CBF alpha values [batch_size, n_agents, 1] (optional)
             dynamics_fn: Optional function to compute control-affine dynamics
             
         Returns:
@@ -320,8 +322,18 @@ class GCBFSafetyLayer(nn.Module):
         # CBF constraint: L_f h + L_g h * u + alpha * h >= 0
         # Rearranging: L_g h * u >= -L_f h - alpha * h
         
+        # Use dynamic alphas if provided, otherwise use fixed alpha
+        if alphas is not None:
+            # Ensure alphas are on the same device and have correct shape
+            alphas = alphas.to(h.device)
+            # Broadcast alphas to match h shape if needed
+            # alphas: [batch, n_agents, 1] -> [batch, n_agents, n_constraints]
+            alpha_values = alphas.squeeze(-1).unsqueeze(-1).expand_as(h)
+        else:
+            alpha_values = self.alpha
+        
         # Right-hand side of constraint: -L_f h - alpha * h
-        rhs = -L_f_h - self.alpha * h
+        rhs = -L_f_h - alpha_values * h
         
         # If using QP solver
         if self.use_qp:
@@ -350,8 +362,10 @@ class GCBFSafetyLayer(nn.Module):
                     constraint_derivatives = L_f_h[b, i] + torch.bmm(L_g_h[b, i].unsqueeze(1), 
                                                                   raw_action[b, i].unsqueeze(-1)).squeeze(-1)
                     
+                    # Use appropriate alpha value for this agent
+                    agent_alpha = alpha_values[b, i, 0] if alphas is not None else self.alpha
                     active_constraints = (constraint_values < active_margin) | \
-                                       (constraint_derivatives + self.alpha * constraint_values < 0)
+                                       (constraint_derivatives + agent_alpha * constraint_values < 0)
                     
                     # Skip if no active constraints
                     if not torch.any(active_constraints):
@@ -390,7 +404,7 @@ class GCBFSafetyLayer(nn.Module):
             # Instead of solving a QP, we just project the action if constraints are violated
             
             # Check which constraints are violated: L_f h + L_g h * u_raw + alpha * h < 0
-            constraint_values = L_f_h + torch.matmul(L_g_h, raw_action.unsqueeze(-1)).squeeze(-1) + self.alpha * h
+            constraint_values = L_f_h + torch.matmul(L_g_h, raw_action.unsqueeze(-1)).squeeze(-1) + alpha_values * h
             violations = constraint_values < 0
             
             # Initialize safe action as raw action

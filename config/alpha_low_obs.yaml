@@ -36,4 +36,6 @@ training:
   eval_interval: 100
   goal_loss_weight: 1.0
   control_loss_weight: 0.01
-  safety_loss_weight: 10.0 
+  safety_loss_weight: 10.0
+  jerk_weight: 0.05               # Weight for jerk penalty (rate of change of action)
+  alpha_reg_weight: 0.01          # Weight for alpha regularization (encourage smaller alpha values) 

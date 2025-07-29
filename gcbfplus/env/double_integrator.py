@@ -496,7 +496,6 @@ class DoubleIntegratorEnv(MultiAgentEnv):
     def apply_safety_layer(self, state: DoubleIntegratorState, raw_action: torch.Tensor, alpha: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Apply safety constraints to raw actions using dynamic alpha values.
-        This method can be overridden to implement GCBF safety filtering.
         
         Args:
             state: Current environment state
@@ -506,15 +505,24 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         Returns:
             Safe action [batch_size, n_agents, action_dim]
         """
-        # Default implementation: just return the raw action
-        # In a subclass, this would be replaced with GCBF safety filtering using dynamic alpha
-        # For now, we store the alpha values in the info for potential future use
+        # Store alpha values for logging and potential future use
         if alpha is not None:
-            # Store alpha values for potential use by safety layers or logging
-            if not hasattr(self, '_current_alpha'):
-                self._current_alpha = alpha
+            self._current_alpha = alpha
         
-        return raw_action
+        # If a safety layer is available, use it with dynamic alphas
+        if hasattr(self, 'safety_layer') and self.safety_layer is not None:
+            try:
+                # Call safety layer with dynamic alphas
+                safe_action = self.safety_layer.forward(state, raw_action, alphas=alpha)
+                return safe_action
+            except Exception as e:
+                # If safety layer fails, fall back to raw action
+                # This ensures robustness during training
+                print(f"Warning: Safety layer failed: {e}. Using raw action.")
+                return raw_action
+        else:
+            # Default implementation: return raw action if no safety layer
+            return raw_action
 
     def dynamics(self, state: DoubleIntegratorState, action: torch.Tensor) -> torch.Tensor:
         """
