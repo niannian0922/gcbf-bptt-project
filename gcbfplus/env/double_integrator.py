@@ -522,7 +522,7 @@ class DoubleIntegratorEnv(MultiAgentEnv):
                 return raw_action
         else:
             # Default implementation: return raw action if no safety layer
-        return raw_action
+            return raw_action
 
     def dynamics(self, state: DoubleIntegratorState, action: torch.Tensor) -> torch.Tensor:
         """
