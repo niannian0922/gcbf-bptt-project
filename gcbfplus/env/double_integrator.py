@@ -1,7 +1,10 @@
+# 双积分器多智能体环境 - 包含GCBF安全层和瓶颈场景支持
+# 支持动态Alpha安全边距和实时碰撞避免
+
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Dict, Tuple, Optional, Any
+from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
 from .multi_agent_env import MultiAgentEnv, MultiAgentState, StepResult
