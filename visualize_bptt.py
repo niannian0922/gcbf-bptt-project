@@ -355,26 +355,26 @@ def main():
         hidden_dim = policy_network_config.get('hidden_dim', 64)
         n_layers = policy_network_config.get('n_layers', 2)
         
-        policy_config = {
-            'type': 'bptt',
-            'perception': {
-                'input_dim': env.observation_shape[-1],
+    policy_config = {
+        'type': 'bptt',
+        'perception': {
+            'input_dim': env.observation_shape[-1],
                 'hidden_dim': hidden_dim,
                 'num_layers': n_layers,
-                'activation': 'relu',
-                'use_batch_norm': False
-            },
-            'memory': {
+            'activation': 'relu',
+            'use_batch_norm': False
+        },
+        'memory': {
                 'hidden_dim': hidden_dim,
-                'num_layers': 1
-            },
-            'policy_head': {
-                'output_dim': env.action_shape[-1],
+            'num_layers': 1
+        },
+        'policy_head': {
+            'output_dim': env.action_shape[-1],
                 'hidden_dims': [hidden_dim],
-                'action_scaling': True,
-                'action_bound': 1.0
-            }
+            'action_scaling': True,
+            'action_bound': 1.0
         }
+    }
     
     # Create policy network
     policy_network = create_policy_from_config(policy_config)

@@ -52,5 +52,5 @@ training:
   # Loss weights
   goal_weight: 1.0               # Weight for goal reaching reward
   safety_weight: 10.0            # Weight for safety violations
-  control_weight: 0.1            # Weight for control effort
+  control_weight: 0.1            # Weight for control effort 
   alpha_reg_weight: 0.02         # Weight for alpha regularization (slightly higher for verification) 

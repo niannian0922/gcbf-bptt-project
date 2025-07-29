@@ -89,8 +89,8 @@ def main():
         
         # Add default values for missing perception config if needed
         if 'perception' not in policy_config:
-            hidden_dim = policy_network_config.get('hidden_dim', 64)
-            n_layers = policy_network_config.get('n_layers', 2)
+    hidden_dim = policy_network_config.get('hidden_dim', 64)
+    n_layers = policy_network_config.get('n_layers', 2)
             obs_dim = env.observation_shape[-1]
             print(f"Environment observation dimension: {obs_dim}")
             
@@ -113,29 +113,29 @@ def main():
         # Fallback: create default configuration if no policy config in YAML
         hidden_dim = 64
         n_layers = 2
-        obs_dim = env.observation_shape[-1]
-        print(f"Environment observation dimension: {obs_dim}")
-        
-        policy_config = {
-            'type': 'bptt',
-            'perception': {
+    obs_dim = env.observation_shape[-1]
+    print(f"Environment observation dimension: {obs_dim}")
+    
+    policy_config = {
+        'type': 'bptt',
+        'perception': {
                 'input_dim': obs_dim,
-                'hidden_dim': hidden_dim,
-                'num_layers': n_layers,
-                'activation': 'relu',
-                'use_batch_norm': False
-            },
-            'memory': {
-                'hidden_dim': hidden_dim,
-                'num_layers': 1
-            },
-            'policy_head': {
+            'hidden_dim': hidden_dim,
+            'num_layers': n_layers,
+            'activation': 'relu',
+            'use_batch_norm': False
+        },
+        'memory': {
+            'hidden_dim': hidden_dim,
+            'num_layers': 1
+        },
+        'policy_head': {
                 'output_dim': env.action_shape[-1],
-                'hidden_dims': [hidden_dim],
-                'action_scaling': True,
-                'action_bound': 1.0
-            }
+            'hidden_dims': [hidden_dim],
+            'action_scaling': True,
+            'action_bound': 1.0
         }
+    }
     
     # Create the policy network
     policy_network = create_policy_from_config(policy_config)

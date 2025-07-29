@@ -100,11 +100,11 @@ class DoubleIntegratorEnv(MultiAgentEnv):
             return (self.num_agents, 1, image_size, image_size)  # Depth images
         else:
             # State-based observations
-            if self.obstacles_config is not None:
-                # Include position (2) and radius (1) of closest obstacle
-                return (self.num_agents, self.state_dim + self.pos_dim + self.pos_dim + 1)
-            else:
-                return (self.num_agents, self.state_dim + self.pos_dim)  # state + goal position
+        if self.obstacles_config is not None:
+            # Include position (2) and radius (1) of closest obstacle
+            return (self.num_agents, self.state_dim + self.pos_dim + self.pos_dim + 1)
+        else:
+            return (self.num_agents, self.state_dim + self.pos_dim)  # state + goal position
 
     @property
     def action_shape(self) -> Tuple[int, ...]:
@@ -400,44 +400,44 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         
         else:
             # State-based observations (original implementation)
-            # First combine position, velocity and goal information
-            base_obs = torch.cat([
-                state.positions,                              # positions
-                state.velocities,                             # velocities
-                state.goals                                   # goals
-            ], dim=2)
+        # First combine position, velocity and goal information
+        base_obs = torch.cat([
+            state.positions,                              # positions
+            state.velocities,                             # velocities
+            state.goals                                   # goals
+        ], dim=2)
+        
+        # If we have obstacles, include information about closest obstacle to each agent
+        if state.obstacles is not None:
+            # Extract obstacle positions and radii
+            obstacle_positions = state.obstacles[..., :-1]  # [batch_size, n_obstacles, pos_dim]
+            obstacle_radii = state.obstacles[..., -1:]     # [batch_size, n_obstacles, 1]
             
-            # If we have obstacles, include information about closest obstacle to each agent
-            if state.obstacles is not None:
-                # Extract obstacle positions and radii
-                obstacle_positions = state.obstacles[..., :-1]  # [batch_size, n_obstacles, pos_dim]
-                obstacle_radii = state.obstacles[..., -1:]     # [batch_size, n_obstacles, 1]
-                
-                # For each agent, find the closest obstacle and include it in observation
+            # For each agent, find the closest obstacle and include it in observation
                 closest_obstacles = torch.zeros(batch_size, self.num_agents, self.pos_dim + 1, device=device)
-                
-                for b in range(batch_size):
-                    for i in range(self.num_agents):
-                        # Compute distances to all obstacles
-                        agent_pos = state.positions[b, i].unsqueeze(0)  # [1, pos_dim]
-                        dists = torch.norm(agent_pos - obstacle_positions[b], dim=1)
-                        
-                        # Find the closest obstacle
-                        closest_idx = torch.argmin(dists)
-                        
-                        # Store position and radius of closest obstacle relative to agent
-                        closest_pos = obstacle_positions[b, closest_idx] - state.positions[b, i]
-                        closest_rad = obstacle_radii[b, closest_idx]
-                        
-                        closest_obstacles[b, i, :self.pos_dim] = closest_pos
-                        closest_obstacles[b, i, self.pos_dim] = closest_rad
-                
-                # Combine with base observation
-                observation = torch.cat([base_obs, closest_obstacles], dim=2)
-            else:
-                observation = base_obs
             
-            return observation
+            for b in range(batch_size):
+                for i in range(self.num_agents):
+                    # Compute distances to all obstacles
+                    agent_pos = state.positions[b, i].unsqueeze(0)  # [1, pos_dim]
+                    dists = torch.norm(agent_pos - obstacle_positions[b], dim=1)
+                    
+                    # Find the closest obstacle
+                    closest_idx = torch.argmin(dists)
+                    
+                    # Store position and radius of closest obstacle relative to agent
+                    closest_pos = obstacle_positions[b, closest_idx] - state.positions[b, i]
+                    closest_rad = obstacle_radii[b, closest_idx]
+                    
+                    closest_obstacles[b, i, :self.pos_dim] = closest_pos
+                    closest_obstacles[b, i, self.pos_dim] = closest_rad
+            
+            # Combine with base observation
+            observation = torch.cat([base_obs, closest_obstacles], dim=2)
+        else:
+            observation = base_obs
+        
+        return observation
     
     def render(self, state: DoubleIntegratorState) -> Any:
         """
@@ -522,7 +522,7 @@ class DoubleIntegratorEnv(MultiAgentEnv):
                 return raw_action
         else:
             # Default implementation: return raw action if no safety layer
-            return raw_action
+        return raw_action
 
     def dynamics(self, state: DoubleIntegratorState, action: torch.Tensor) -> torch.Tensor:
         """
