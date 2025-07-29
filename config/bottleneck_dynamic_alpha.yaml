@@ -1,5 +1,8 @@
-# Bottleneck Environment Configuration for Dynamic Alpha Testing
-# This creates a challenging scenario with two walls and a narrow gap
+# 瓶颈场景动态Alpha配置 - 自适应安全边距实验设置
+# 包含网络结构、训练参数和场景定义
+
+# 实验名称
+run_name: "Bottleneck_Dynamic_Alpha_Experiment"
 
 env:
   area_size: 2.0
