@@ -89,8 +89,8 @@ def main():
         
         # Add default values for missing perception config if needed
         if 'perception' not in policy_config:
-    hidden_dim = policy_network_config.get('hidden_dim', 64)
-    n_layers = policy_network_config.get('n_layers', 2)
+            hidden_dim = policy_network_config.get('hidden_dim', 64)
+            n_layers = policy_network_config.get('n_layers', 2)
             obs_dim = env.observation_shape[-1]
             print(f"Environment observation dimension: {obs_dim}")
             
