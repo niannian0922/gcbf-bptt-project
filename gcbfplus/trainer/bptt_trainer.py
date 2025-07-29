@@ -1,3 +1,6 @@
+# BPTT端到端训练器 - 支持时序反向传播和瓶颈场景分析
+# 集成动态Alpha损失和梯度衰减机制
+
 import os
 import time
 import torch
