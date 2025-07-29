@@ -144,12 +144,12 @@ def main():
     # 3. Create CBF network (optional)
     cbf_network = None
     
+    # Extract CBF alpha parameter from configuration (needed for trainer config)
+    cbf_alpha = env_config.get('cbf_alpha', training_config.get('cbf_alpha', 1.0))
+    
     if cbf_network_config is not None:
         # Extract CBF configuration values with defaults
         cbf_hidden_dim = cbf_network_config.get('hidden_dim', 64)
-        
-        # Extract CBF parameters from either env or training section with defaults
-        cbf_alpha = env_config.get('cbf_alpha', training_config.get('cbf_alpha', 1.0))
         safety_margin = env_config.get('safety_margin', env_config.get('car_radius', 0.05) * 1.1)
         
         # Prepare CBF safety layer configuration
