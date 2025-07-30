@@ -1,5 +1,4 @@
-# 双积分器多智能体环境 - 包含GCBF安全层和瓶颈场景支持
-# 支持动态Alpha安全边距和实时碰撞避免
+# Multi-agent double integrator environment with safety layers
 
 import torch
 import torch.nn as nn

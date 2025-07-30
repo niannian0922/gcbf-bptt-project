@@ -1,5 +1,4 @@
-# 瓶颈场景动态Alpha配置 - 自适应安全边距实验设置
-# 包含网络结构、训练参数和场景定义
+# Dynamic alpha configuration for bottleneck scenarios
 
 # 实验名称
 run_name: "Bottleneck_Dynamic_Alpha_Experiment"
@@ -12,17 +11,17 @@ env:
   max_steps: 200
   agent_radius: 0.05
   comm_radius: 0.5
-  cbf_alpha: 1.0  # Default, will be overridden by dynamic alpha
+  cbf_alpha: 1.0  # 默认值，将被动态alpha覆盖
   obstacles:
     bottleneck: true
-    gap_width: 0.25        # Narrow gap of 0.25 units
-    wall_thickness: 0.1    # Wall thickness
-    wall_height: 1.6       # Height of each wall segment  
-    gap_position: 0.5      # Gap at center (0.5)
-    obstacle_spacing: 0.08 # Spacing between wall obstacles
-    obstacle_radius: 0.06  # Radius of each wall obstacle
+    gap_width: 0.25        # 0.25单位的狭窄缺口
+    wall_thickness: 0.1    # 墙体厚度
+    wall_height: 1.6       # 每个墙段的高度
+    gap_position: 0.5      # 缺口在中心位置（0.5）
+    obstacle_spacing: 0.08 # 墙体障碍物间距
+    obstacle_radius: 0.06  # 每个墙体障碍物的半径
 
-# Network configurations
+# 网络配置
 networks:
   policy:
     type: bptt
@@ -52,7 +51,7 @@ networks:
     update_hidden_sizes: [128, 128]
     aggr_hidden_sizes: [128]
 
-# Training configuration
+# 训练配置
 training:
   name: "Bottleneck_Dynamic_Alpha"
   steps: 20000
@@ -74,13 +73,13 @@ training:
     jerk_weight: 0.05
     alpha_reg_weight: 0.01
 
-# Environment metrics for bottleneck analysis
+# 瓶颈分析的环境指标
 bottleneck_metrics:
   enabled: true
   bottleneck_region:
-    x_min: 0.9   # Region around the bottleneck
+    x_min: 0.9   # 瓶颈周围的区域
     x_max: 1.1
     y_min: 0.8
     y_max: 1.2
-  throughput_window: 1.0  # Time window for throughput calculation
-  velocity_threshold: 0.1 # Below this speed = waiting 
+  throughput_window: 1.0  # 吞吐量计算的时间窗口
+  velocity_threshold: 0.1 # 低于此速度 = 等待 

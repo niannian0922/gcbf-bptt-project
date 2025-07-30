@@ -1,62 +1,59 @@
-# Configuration file for BPTT training with medium CBF alpha
-run_name: "GCBF+_BTN_BPTT_Medium_Alpha"
+# Medium alpha configuration
 
-# Environment parameters
+# 环境参数
 env:
-  num_agents: 8                   # Number of agents in the environment
-  area_size: 1.0                  # Size of the square environment
-  car_radius: 0.05                # Radius of each agent (for collision detection)
-  comm_radius: 0.5                # Communication radius for graph construction
-  mass: 0.1                       # Mass of each agent
-  dt: 0.03                        # Simulation timestep
-  cbf_alpha: 1.0                  # Medium alpha value for CBF safety constraints
+  num_agents: 8
+  area_size: 1.0
+  car_radius: 0.05
+  comm_radius: 0.5
+  mass: 0.1
+  dt: 0.03
+  cbf_alpha: 1.0  # 中等alpha值
+  obstacles:
+    enabled: true
+    num_obstacles: 3
+    obstacle_size: 0.15
 
-# Networks parameters
+# 网络参数
 networks:
-  # Policy GNN parameters
   policy:
-    input_dim: 9                  # state_dim (4) + goal position (2) + obstacle info (3)
-    node_dim: 7                   # Position (2) + Velocity (2) + Goal direction (2) + Agent indicator (1)
-    edge_dim: 4                   # Relative position (2) + Relative velocity (2)
-    hidden_dim: 64                # Dimension of hidden layers
-    n_layers: 2                   # Number of GNN layers
-    msg_hidden_sizes: [64, 64]    # Hidden sizes for message network
-    aggr_hidden_sizes: [64]       # Hidden sizes for attention network
-    update_hidden_sizes: [64, 64] # Hidden sizes for update network
+    input_dim: 9
+    node_dim: 7
+    edge_dim: 4
+    hidden_dim: 64
+    n_layers: 2
+    msg_hidden_sizes: [64, 64]
+    aggr_hidden_sizes: [64]
+    update_hidden_sizes: [64, 64]
   
-  # CBF GNN parameters
   cbf:
-    node_dim: 7                   # Position (2) + Velocity (2) + Goal direction (2) + Agent indicator (1)
-    edge_dim: 4                   # Relative position (2) + Relative velocity (2)
-    hidden_dim: 64                # Dimension of hidden layers
-    n_layers: 2                   # Number of GNN layers
-    msg_hidden_sizes: [64, 64]    # Hidden sizes for message network
-    aggr_hidden_sizes: [64]       # Hidden sizes for attention network
-    update_hidden_sizes: [64, 64] # Hidden sizes for update network
+    node_dim: 7
+    edge_dim: 4
+    hidden_dim: 64
+    n_layers: 2
+    msg_hidden_sizes: [64, 64]
+    aggr_hidden_sizes: [64]
+    update_hidden_sizes: [64, 64]
 
-# Training parameters
+# 训练参数
 training:
-  training_steps: 1000            # Reduced training steps for quick experiment
-  horizon_length: 50              # Horizon length for BPTT rollouts
-  eval_horizon: 100               # Horizon length for evaluation rollouts
-  eval_interval: 100              # Interval between evaluations
-  save_interval: 500              # Interval between model saves
-  learning_rate: 0.001            # Learning rate for Adam optimizer
-  max_grad_norm: 1.0              # Maximum gradient norm (for clipping)
+  training_steps: 10000
+  horizon_length: 50
+  eval_horizon: 100
+  eval_interval: 100
+  save_interval: 1000
+  learning_rate: 0.001
+  max_grad_norm: 1.0
   
-  # Learning rate scheduler
-  use_lr_scheduler: true          # Whether to use learning rate scheduler
-  lr_step_size: 500               # Step size for learning rate scheduler
-  lr_gamma: 0.5                   # Multiplier for learning rate scheduler
-  
-  # Gradient decay for temporal stability
-  gradient_decay_rate: 0.95       # Rate at which gradients decay through time
+  use_lr_scheduler: true
+  lr_step_size: 2000
+  lr_gamma: 0.5
+  gradient_decay_rate: 0.95
 
-  # Loss weights
-  goal_weight: 1.0                # Weight for goal reaching loss
-  safety_weight: 10.0             # Weight for safety loss (CBF violation)
-  control_weight: 0.1             # Weight for control effort loss
-  jerk_weight: 0.05               # Weight for jerk penalty (rate of change of action)
-  alpha_reg_weight: 0.01          # Weight for alpha regularization (encourage smaller alpha values)
+  goal_weight: 1.0
+  safety_weight: 10.0
+  control_weight: 0.1
+  jerk_weight: 0.05
+  cbf_alpha: 1.0
 
 device: "cpu"

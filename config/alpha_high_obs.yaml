@@ -1,41 +1,35 @@
-# Configuration for GCBF+ with BPTT - High Alpha (2.0) with Central Obstacle
-run_name: GCBF+_BTN_BPTT_High_Alpha_Obstacle
+# High alpha with obstacles
 
-# Environment configuration
 env:
-  type: double_integrator
-  num_agents: 12
+  num_agents: 8
   area_size: 1.0
-  dt: 0.1
-  max_steps: 100
-  agent_radius: 0.05
+  car_radius: 0.05
   comm_radius: 0.5
-  cbf_alpha: 2.0
+  mass: 0.1
+  dt: 0.03
+  cbf_alpha: 2.0  # 高alpha值
   obstacles:
-    center_obstacle: true
-    center_radius: 0.25
+    enabled: true
+    num_obstacles: 3
+    obstacle_size: 0.15
 
-# Network configurations
 networks:
   policy:
-    type: bptt
+    input_dim: 9
+    node_dim: 7
+    edge_dim: 4
     hidden_dim: 64
     n_layers: 2
-    activation: relu
-    action_scaling: true
-    action_bound: 1.0
+    msg_hidden_sizes: [64, 64]
+    aggr_hidden_sizes: [64]
+    update_hidden_sizes: [64, 64]
 
-# Training parameters
 training:
-  training_steps: 20000
-  batch_size: 1
-  horizon: 50
-  eval_horizon: 50
+  training_steps: 5000
+  horizon_length: 50
   learning_rate: 0.001
-  save_interval: 2000
-  eval_interval: 100
-  goal_loss_weight: 1.0
-  control_loss_weight: 0.01
-  safety_loss_weight: 10.0 
-  jerk_weight: 0.05               # Weight for jerk penalty (rate of change of action)
-  alpha_reg_weight: 0.01          # Weight for alpha regularization (encourage smaller alpha values) 
+  goal_weight: 1.0
+  safety_weight: 10.0
+  control_weight: 0.1
+  jerk_weight: 0.05
+  cbf_alpha: 2.0 

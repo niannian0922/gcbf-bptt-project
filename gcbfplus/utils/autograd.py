@@ -1,5 +1,4 @@
-# 自动微分工具 - 梯度衰减和时序稳定化
-# 支持长时间范围BPTT训练的梯度控制
+# Gradient decay utilities for temporal stability in BPTT
 
 import torch
 import torch.nn as nn

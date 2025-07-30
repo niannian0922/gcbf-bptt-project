@@ -1,5 +1,4 @@
-# Bottleneck Environment Configuration for Fixed Alpha (Low) Testing
-# This creates a challenging scenario with two walls and a narrow gap
+# Fixed alpha configuration for bottleneck scenarios (low alpha)
 
 env:
   area_size: 2.0
@@ -9,17 +8,17 @@ env:
   max_steps: 200
   agent_radius: 0.05
   comm_radius: 0.5
-  cbf_alpha: 0.5  # Fixed low alpha
+  cbf_alpha: 0.5  # 固定低alpha值
   obstacles:
     bottleneck: true
-    gap_width: 0.25        # Narrow gap of 0.25 units
-    wall_thickness: 0.1    # Wall thickness
-    wall_height: 1.6       # Height of each wall segment  
-    gap_position: 0.5      # Gap at center (0.5)
-    obstacle_spacing: 0.08 # Spacing between wall obstacles
-    obstacle_radius: 0.06  # Radius of each wall obstacle
+    gap_width: 0.25        # 0.25单位的狭窄缺口
+    wall_thickness: 0.1    # 墙体厚度
+    wall_height: 1.6       # 每个墙段的高度
+    gap_position: 0.5      # 缺口在中心位置（0.5）
+    obstacle_spacing: 0.08 # 墙体障碍物间距
+    obstacle_radius: 0.06  # 每个墙体障碍物的半径
 
-# Network configurations
+# 网络配置
 networks:
   policy:
     type: bptt
@@ -39,7 +38,7 @@ networks:
       activation: relu
       action_scaling: true
       output_dim: 2
-      predict_alpha: false  # Fixed alpha, no alpha prediction
+      predict_alpha: false  # 固定alpha，不预测alpha
   cbf:
     hidden_dim: 128
     edge_dim: 4
@@ -49,7 +48,7 @@ networks:
     update_hidden_sizes: [128, 128]
     aggr_hidden_sizes: [128]
 
-# Training configuration
+# 训练配置
 training:
   name: "Bottleneck_Fixed_Alpha_Low"
   steps: 20000
@@ -69,15 +68,15 @@ training:
     safety_weight: 10.0
     control_weight: 0.1
     jerk_weight: 0.05
-    # No alpha_reg_weight for fixed alpha
+    # 固定alpha无需alpha_reg_weight
 
-# Environment metrics for bottleneck analysis
+# 瓶颈分析的环境指标
 bottleneck_metrics:
   enabled: true
   bottleneck_region:
-    x_min: 0.9   # Region around the bottleneck
+    x_min: 0.9   # 瓶颈周围的区域
     x_max: 1.1
     y_min: 0.8
     y_max: 1.2
-  throughput_window: 1.0  # Time window for throughput calculation
-  velocity_threshold: 0.1 # Below this speed = waiting 
+  throughput_window: 1.0  # 吞吐量计算的时间窗口
+  velocity_threshold: 0.1 # 低于此速度 = 等待 

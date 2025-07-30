@@ -1,5 +1,4 @@
-# BPTT策略网络模块 - 支持自适应安全边距和多智能体协同
-# Version: 2024.12 - 完整中文化版本
+# Policy networks with dynamic alpha prediction for adaptive safety margins
 
 import torch
 import torch.nn as nn

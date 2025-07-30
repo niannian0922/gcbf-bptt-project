@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-BPTT多智能体训练脚本 - 支持自适应安全边距和瓶颈场景
-集成端到端优化和动态Alpha机制
+Training script for multi-agent navigation with dynamic alpha
 """
 
 import argparse
