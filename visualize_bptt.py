@@ -269,14 +269,14 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
                         interval=50, blit=True, repeat=True)
     
     # 如果请求，保存动画
-    if output_path:
+    if save_path:
         try:
-            anim.save(output_path, writer='pillow', fps=20)
-            print(f'动画已保存至: {output_path}')
+            anim.save(save_path, writer='pillow', fps=20)
+            print(f'动画已保存至: {save_path}')
         except Exception as e:
             # 如果ffmpeg不可用，使用默认写入器
             print(f'保存为GIF时出错: {e}')
-            anim.save(output_path, writer='pillow', fps=10)
+            anim.save(save_path, writer='pillow', fps=10)
     
     # 打印定量指标摘要
     print("\n=== 仿真指标摘要 ===")
@@ -526,12 +526,12 @@ def main():
     # 运行可视化
     print(f"运行可视化并保存到: {output_path}")
     try:
-        anim, metrics = visualize_policy(
+        anim, metrics = visualize_trajectory(
             env=env,
             policy_network=policy_network,
             cbf_network=cbf_network,
             config=config,
-            output_path=output_path,
+            save_path=output_path,
             device=device
         )
         
@@ -581,4 +581,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main() 
+    main()
+
+# End of visualization script 
