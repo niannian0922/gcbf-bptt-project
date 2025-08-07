@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "F:\myproject\gcbf-bptt-project\test_training_components.py", line 158, in <module>
-    main()
-  File "F:\myproject\gcbf-bptt-project\test_training_components.py", line 130, in main
-    print("\U0001f680 Safety-Gated AlphaÑµÁ·×é¼þ²âÊÔ")
-UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f680' in position 0: illegal multibyte sequence
