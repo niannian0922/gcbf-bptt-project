@@ -1,0 +1,17 @@
+{
+  "version": "FIXED - Smart Circular Obstacle Avoidance",
+  "key_improvements": [
+    "Added tangential bypass force for circular obstacles",
+    "Smart direction selection toward target",
+    "Enhanced backside escape mechanism",
+    "Radial repulsion + tangential guidance"
+  ],
+  "total_steps": 600,
+  "success_rate": "75.0%",
+  "agents_reached_target": "6/8",
+  "minimum_distance_achieved": 0.4459045659105677,
+  "collision_count": 35,
+  "total_circle_avoidance_activations": 984,
+  "final_phase": "FINALIZING",
+  "complete_journey": false
+}

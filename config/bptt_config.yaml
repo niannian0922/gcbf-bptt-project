@@ -59,5 +59,4 @@ training:
   safety_weight: 10.0             # 安全损失的权重（CBF违反）
   control_weight: 0.1             # 控制努力损失的权重
   jerk_weight: 0.05               # 抖动惩罚的权重（动作变化率）
-  alpha_reg_weight: 0.01          # alpha正则化的权重（鼓励更小的alpha值）
-  cbf_alpha: 1.0                  # CBF条件中的Alpha参数（h_dot + alpha*h >= 0） 
+  alpha_reg_weight: 0.01          # alpha正则化的权重（鼓励更小的alpha值）  cbf_alpha: 1.0                  # CBF条件中的Alpha参数（h_dot + alpha*h >= 0） 

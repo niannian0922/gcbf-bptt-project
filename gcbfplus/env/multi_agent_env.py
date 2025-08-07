@@ -376,7 +376,7 @@ class MultiAgentEnv(BaseEnv):
         edge_features = rel_positions * mask.float()
         
         return adjacency, edge_features
-    
+
     @abstractmethod
     def dynamics(self, state: MultiAgentState, action: torch.Tensor) -> torch.Tensor:
         """

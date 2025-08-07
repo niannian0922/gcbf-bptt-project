@@ -79,6 +79,7 @@ class BPTTTrainer:
         self.control_weight = self.config.get('control_weight', 0.1)
         self.jerk_weight = self.config.get('jerk_weight', 0.05)  # 加速度变化率权重
         self.alpha_reg_weight = self.config.get('alpha_reg_weight', 0.01)  # Alpha正则化权重
+        self.progress_weight = self.config.get('progress_weight', 0.0)  # 进度奖励权重
         self.cbf_alpha = self.config.get('cbf_alpha', 1.0)
         
         # 创建日志目录
@@ -252,13 +253,19 @@ class BPTTTrainer:
             stacked_alphas = torch.stack(trajectory_alphas)
             alpha_regularization_loss = torch.mean(stacked_alphas)
             
+            # 进度奖励损失（基于潜力的奖励塑形）
+            progress_loss = 0.0
+            if self.progress_weight > 0.0 and len(trajectory_states) > 1:
+                progress_loss = self._calculate_progress_loss(trajectory_states)
+            
             # 计算总损失作为加权和
             total_loss = (
                 self.goal_weight * goal_loss +
                 self.safety_weight * total_safety_loss +
                 self.control_weight * control_effort +
                 self.jerk_weight * jerk_loss +  # 添加加速度变化率惩罚
-                self.alpha_reg_weight * alpha_regularization_loss  # 添加Alpha正则化
+                self.alpha_reg_weight * alpha_regularization_loss +  # 添加Alpha正则化
+                self.progress_weight * progress_loss  # 添加进度奖励
             )
             
             # 通过整个计算图反向传播损失
@@ -504,4 +511,3 @@ class BPTTTrainer:
             self.optimizer.load_state_dict(torch.load(optim_path))
             print(f"Optimizer state loaded from {optim_path}")
         
-        print(f"Models loaded from step {step}") 

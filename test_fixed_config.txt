@@ -1,0 +1,26 @@
+Safety-Gated Alpha训练组件测试
+================================
+=== 测试基础导入 ===
+OK: DoubleIntegratorEnv导入成功
+OK: BPTTTrainer导入成功
+OK: yaml模块导入成功
+
+=== 测试配置文件 ===
+OK: 配置文件加载成功
+WARNING: 缺少safety_loss_threshold参数
+
+=== 测试环境创建 ===
+OK: 环境创建成功
+观测形状: (8, 6)
+动作形状: (8, 2)
+
+=== 测试Safety-Gated机制 ===
+安全阈值: 0.01
+测试 1: Safety=0.0050, Gate=ON, Alpha_Reg=0.8333
+测试 2: Safety=0.0150, Gate=OFF, Alpha_Reg=0.0000
+测试 3: Safety=0.0010, Gate=ON, Alpha_Reg=0.8333
+OK: Safety-Gated机制测试通过
+
+================================
+SUCCESS: 所有组件测试通过!
+可以开始正式训练

@@ -13,7 +13,7 @@ import torch.nn as nn
 import yaml
 from pathlib import Path
 
-from gcbfplus.env import DoubleIntegratorEnv, CrazyFlieEnv
+from gcbfplus.env import DoubleIntegratorEnv
 from gcbfplus.env.gcbf_safety_layer import GCBFSafetyLayer
 from gcbfplus.policy import BPTTPolicy, create_policy_from_config
 from gcbfplus.trainer.bptt_trainer import BPTTTrainer
@@ -88,8 +88,8 @@ def main():
     # 使用YAML文件中的策略配置
     if policy_config:
         # 确保策略配置具有正确的观测和动作维度
-        obs_shape = env.get_observation_shape()
-        action_shape = env.get_action_shape()
+        obs_shape = env.observation_shape
+        action_shape = env.action_shape
         
         print(f"观测形状: {obs_shape}")
         print(f"动作形状: {action_shape}")
@@ -110,10 +110,12 @@ def main():
         else:  # 状态输入 [n_agents, obs_dim]
             perception_config.update({
                 'use_vision': False,
-                'input_dim': obs_shape[-1],  # obs_dim
                 'output_dim': perception_config.get('output_dim', 128),
                 'hidden_dims': perception_config.get('hidden_dims', [256, 256])
             })
+            # 只在config中沒有明確指定時才設置input_dim
+            if 'input_dim' not in perception_config:
+                perception_config['input_dim'] = obs_shape[-1]
         
         # 如果需要，添加默认记忆配置
         if 'memory' not in policy_config:
@@ -150,8 +152,8 @@ def main():
         print(f"策略配置: {policy_config}")
     else:
         # 后备方案：如果YAML中没有策略配置，创建默认配置
-        obs_shape = env.get_observation_shape()
-        action_shape = env.get_action_shape()
+        obs_shape = env.observation_shape
+        action_shape = env.action_shape
         
         print(f"观测形状: {obs_shape}")
         print(f"动作形状: {action_shape}")
@@ -252,8 +254,7 @@ def main():
     print(f"学习率: {trainer_config['learning_rate']}")
     print(f"批处理大小: {trainer_config['batch_size']}")
     
-    # 设置保存目录
-    trainer.set_save_dir(args.log_dir)
+    # 保存目录已在 BPTTTrainer 初始化时设置
     
     # 开始训练
     trainer.train()

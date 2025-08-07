@@ -28,8 +28,13 @@ training:
   training_steps: 5000
   horizon_length: 50
   learning_rate: 0.001
+  
+loss_weights:
   goal_weight: 1.0
   safety_weight: 10.0
   control_weight: 0.1
   jerk_weight: 0.05
-  cbf_alpha: 1.0 
+  alpha_reg_weight: 0.01
+  progress_weight: 0.15
+  
+cbf_alpha: 1.0 

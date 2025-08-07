@@ -2,9 +2,11 @@ from flax import core, struct
 from jaxtyping import Float, Int
 from typing import Any
 import jax.numpy as jnp
+import jax.random as jr
 
 # jax类型
 Array = jnp.ndarray
+PRNGKey = Array  # JAX PRNGKey is just an Array
 Action = Float[Array, "batch action_dim"]
 Obs = Float[Array, "batch obs_dim"]
 State = Float[Array, "batch state_dim"]

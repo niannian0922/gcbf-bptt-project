@@ -19,6 +19,7 @@ from ..utils.typing import EdgeIndex, Pos2d, Pos3d, Array
 from ..utils.utils import merge01, tree_index, MutablePatchCollection, save_anim
 from .obstacle import Cuboid, Sphere, Obstacle, Rectangle
 from .base import RolloutResult
+import torch
 
 
 def plot_graph(
@@ -32,6 +33,8 @@ def plot_graph(
         edge_color: Union[str, List[str]] = 'k',
         alpha: float = 1.0,
         obstacle_color: str = '#000000',
+        communication_range: Optional[float] = None,
+        show_communication_graph: bool = False,
 ) -> Axes:
     if isinstance(radius, float):
         radius = np.ones(pos.shape[0]) * radius
@@ -63,6 +66,29 @@ def plot_graph(
         lines = np.stack([start, end], axis=1)
         edges = LineCollection(lines, colors=edge_color, linewidths=widths, alpha=0.5)
         ax.add_collection(edges)
+    
+    # 添加通信图可视化
+    if show_communication_graph and communication_range is not None:
+        communication_edges = []
+        for i in range(pos.shape[0]):
+            for j in range(i + 1, pos.shape[0]):
+                # 计算智能体间距离
+                distance = np.linalg.norm(pos[i] - pos[j])
+                if distance <= communication_range:
+                    # 在通信范围内，添加连接线
+                    communication_edges.append([pos[i], pos[j]])
+        
+        if communication_edges:
+            # 绘制半透明的灰色通信连接线
+            comm_lines = LineCollection(
+                communication_edges, 
+                colors='gray', 
+                linewidths=1.0, 
+                alpha=0.3,
+                linestyles='--'
+            )
+            ax.add_collection(comm_lines)
+    
     return ax
 
 
@@ -411,3 +437,99 @@ def render_video(
     anim_T = len(T_graph.n_node)
     ani = FuncAnimation(fig, update, frames=anim_T, init_func=init_fn, interval=mspf, blit=True)
     save_anim(ani, video_path)
+
+
+def plot_cbf_safety_field(
+    ax: Axes, 
+    agent_positions: np.ndarray, 
+    highlighted_agent_idx: int,
+    cbf_network,
+    env,
+    device: torch.device,
+    grid_size: int = 50,
+    field_radius: float = 3.0,
+    colormap: str = 'coolwarm',
+    alpha: float = 0.5
+) -> Axes:
+    """
+    为指定智能体绘制CBF安全场可视化（"安全光环"效应）
+    
+    Args:
+        ax: matplotlib轴对象
+        agent_positions: 所有智能体的位置 [num_agents, 2]
+        highlighted_agent_idx: 要高亮显示的智能体索引
+        cbf_network: 训练好的CBF网络
+        env: 环境对象
+        device: 计算设备
+        grid_size: 网格大小
+        field_radius: 安全场半径
+        colormap: 颜色映射
+        alpha: 透明度
+    """
+    if cbf_network is None:
+        return ax
+    
+    # 获取高亮智能体的位置
+    highlight_pos = agent_positions[highlighted_agent_idx]
+    
+    # 创建围绕高亮智能体的2D网格
+    x_min, x_max = highlight_pos[0] - field_radius, highlight_pos[0] + field_radius
+    y_min, y_max = highlight_pos[1] - field_radius, highlight_pos[1] + field_radius
+    
+    x_grid = np.linspace(x_min, x_max, grid_size)
+    y_grid = np.linspace(y_min, y_max, grid_size)
+    X, Y = np.meshgrid(x_grid, y_grid)
+    
+    # 为网格上的每个点计算CBF值
+    cbf_values = np.zeros((grid_size, grid_size))
+    
+    with torch.no_grad():
+        for i in range(grid_size):
+            for j in range(grid_size):
+                # 创建假设高亮智能体在此位置的状态
+                test_positions = agent_positions.copy()
+                test_positions[highlighted_agent_idx] = np.array([X[i, j], Y[i, j]])
+                
+                # 构造环境状态
+                test_state = create_test_state(env, test_positions, device)
+                
+                # 获取观测
+                obs = env.get_observations(test_state)
+                obs = obs.to(device)
+                
+                # 计算CBF值
+                cbf_val = cbf_network(obs.view(obs.shape[0], -1))
+                cbf_values[i, j] = cbf_val.cpu().numpy().item()
+    
+    # 绘制等高线图
+    contour = ax.contourf(X, Y, cbf_values, levels=20, cmap=colormap, alpha=alpha, extend='both')
+    
+    # 添加零等值线（安全边界）
+    ax.contour(X, Y, cbf_values, levels=[0], colors='black', linewidths=2, alpha=0.8)
+    
+    return ax
+
+
+def create_test_state(env, positions, device):
+    """
+    为CBF计算创建测试状态
+    """
+    # 创建基本状态结构
+    num_agents = positions.shape[0]
+    
+    # 假设速度为零（可以根据实际情况调整）
+    velocities = np.zeros_like(positions)
+    
+    # 将位置和速度组合为状态
+    states = np.concatenate([positions, velocities], axis=1)
+    
+    # 转换为torch张量
+    states_tensor = torch.tensor(states, dtype=torch.float32, device=device)
+    
+    # 创建简单的状态对象（这需要根据实际环境调整）
+    class TestState:
+        def __init__(self, positions, velocities):
+            self.positions = torch.tensor(positions, dtype=torch.float32, device=device).unsqueeze(0)
+            self.velocities = torch.tensor(velocities, dtype=torch.float32, device=device).unsqueeze(0)
+    
+    return TestState(positions, velocities)

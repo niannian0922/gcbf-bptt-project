@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
 from .multi_agent_env import MultiAgentEnv, MultiAgentState, StepResult
-from ..utils.autograd import g_decay, apply_temporal_decay
+from ..utils.autograd import apply_gradient_decay, temporal_gradient_decay
 
 # 视觉相关导入
 from .vision_renderer import SimpleDepthRenderer, create_simple_renderer
@@ -318,15 +318,12 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         # Compute state derivatives using dynamics
         derivatives = self.dynamics(state, safe_action)
         
-        # Update positions and velocities using Euler integration with temporal gradient decay
+        # Update positions and velocities using Euler integration with gradient decay
         if self.use_gradient_decay and self.training:
-            # Apply temporal gradient decay to stabilize long-horizon BPTT training
-            positions_decayed = apply_temporal_decay(
-                state.positions, self.gradient_decay_rate, self.dt, self.training
-            )
-            velocities_decayed = apply_temporal_decay(
-                state.velocities, self.gradient_decay_rate, self.dt, self.training
-            )
+            # Apply gradient decay to stabilize long-horizon BPTT training
+            decay_factor = torch.tensor(self.gradient_decay_rate, device=state.positions.device)
+            positions_decayed = apply_gradient_decay(state.positions, decay_factor)
+            velocities_decayed = apply_gradient_decay(state.velocities, decay_factor)
             
             new_positions = positions_decayed + velocities_decayed * self.dt
             new_velocities = velocities_decayed + (safe_action / self.mass) * self.dt

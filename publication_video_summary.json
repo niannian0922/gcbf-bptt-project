@@ -1,0 +1,13 @@
+{
+  "Safety-Gated Publication Video": {
+    "algorithm": "Safety-Gated Alpha Regularization",
+    "agents": 8,
+    "simulation_steps": 200,
+    "minimum_distance_achieved": 0.6702693036083553,
+    "average_alpha": 0.44249999999999995,
+    "safety_violations": 0,
+    "output_file": "final_publication_video.gif",
+    "breakthrough": "Prevents destructive competition between safety and efficiency",
+    "innovation": "Conditional alpha regularization based on safety state"
+  }
+}

@@ -11,7 +11,7 @@ from matplotlib.animation import FuncAnimation
 import matplotlib.patches as patches
 import torch.nn as nn
 
-from gcbfplus.env import DoubleIntegratorEnv, CrazyFlieEnv
+from gcbfplus.env import DoubleIntegratorEnv
 from gcbfplus.policy import BPTTPolicy, create_policy_from_config
 from gcbfplus.trainer.bottleneck_metrics import BottleneckAnalyzer, BottleneckMetrics
 
@@ -158,8 +158,11 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
     all_positions = np.array(all_positions)
     all_goals = np.array(all_goals)
     
-    # 创建可视化
-    fig, ax = plt.subplots(figsize=(10, 10))
+    # 创建双面板可视化布局
+    fig, (ax_main, ax_metrics) = plt.subplots(1, 2, figsize=(16, 8))
+    
+    # 主面板（左侧）用于动画
+    ax = ax_main  # 保持向后兼容
     
     # 定义智能体和目标颜色
     agent_colors = plt.cm.tab10(np.linspace(0, 1, all_positions.shape[1]))
@@ -228,6 +231,28 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
                           verticalalignment='top', fontsize=9,
                           bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
     
+    # 设置右侧指标面板
+    ax_metrics.set_title('实时指标监控', fontsize=12, fontweight='bold')
+    ax_metrics.set_xlabel('时间步')
+    ax_metrics.set_ylabel('最小智能体间距离')
+    ax_metrics.grid(True, alpha=0.3)
+    
+    # 初始化动态图表数据
+    time_steps = []
+    distance_values = []
+    safety_threshold = 2 * env.config.get('car_radius', 0.05)  # 安全阈值
+    
+    # 创建空的线图对象
+    distance_line, = ax_metrics.plot([], [], 'b-', linewidth=2, label='最小距离')
+    threshold_line = ax_metrics.axhline(y=safety_threshold, color='r', linestyle='--', 
+                                       linewidth=1, alpha=0.7, label='安全阈值')
+    ax_metrics.legend()
+    
+    # 通信图可视化参数
+    communication_range = config.get('env', {}).get('sensing_radius', 2.0)
+    show_cbf_field = config.get('visualization', {}).get('show_cbf_field', True)
+    highlighted_agent = config.get('visualization', {}).get('highlighted_agent', 0)
+    
     def init():
         """初始化动画。"""
         for i, patch in enumerate(agent_patches):
@@ -236,14 +261,68 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
             line.set_data([], [])
         info_text.set_text('')
         metrics_text.set_text('')
-        return agent_patches + trajectory_lines + [info_text, metrics_text]
+        
+        # 初始化右侧面板
+        distance_line.set_data([], [])
+        ax_metrics.set_xlim(0, len(all_positions))
+        if min_distances:
+            ax_metrics.set_ylim(0, max(min_distances) * 1.1)
+        
+        return agent_patches + trajectory_lines + [info_text, metrics_text, distance_line]
     
     def animate(frame):
         """更新每一帧的动画。"""
+        # 清除之前的动态元素
+        ax.collections.clear()  # 清除通信线和CBF等高线
+        
+        # 重新添加障碍物
+        if obstacles is not None and len(obstacles) > 0:
+            for obs in obstacles:
+                if len(obs) >= 3:  # [x, y, radius]
+                    circle = plt.Circle((obs[0], obs[1]), obs[2], 
+                                      color='red', alpha=0.3)
+                    ax.add_patch(circle)
+                elif len(obs) >= 4:  # [x, y, width, height] for rectangle
+                    rect = plt.Rectangle((obs[0]-obs[2]/2, obs[1]-obs[3]/2), 
+                                       obs[2], obs[3], color='red', alpha=0.3)
+                    ax.add_patch(rect)
+        
         # 更新智能体位置
+        current_positions = np.zeros((all_positions.shape[1], 2))
         for i, patch in enumerate(agent_patches):
             if frame < len(all_positions):
                 patch.center = all_positions[frame, i, 0], all_positions[frame, i, 1]
+                current_positions[i] = [all_positions[frame, i, 0], all_positions[frame, i, 1]]
+        
+        # 绘制通信图
+        if frame < len(all_positions):
+            from gcbfplus.env.plot import plot_graph
+            plot_graph(
+                ax=ax,
+                pos=current_positions,
+                radius=env.config.get('car_radius', 0.05),
+                color=['blue'] * len(current_positions),
+                with_label=False,
+                communication_range=communication_range,
+                show_communication_graph=True
+            )
+        
+        # 绘制CBF安全场（针对高亮智能体）
+        if show_cbf_field and cbf_network and frame < len(all_positions) and highlighted_agent < len(current_positions):
+            try:
+                from gcbfplus.env.plot import plot_cbf_safety_field
+                plot_cbf_safety_field(
+                    ax=ax,
+                    agent_positions=current_positions,
+                    highlighted_agent_idx=highlighted_agent,
+                    cbf_network=cbf_network,
+                    env=env,
+                    device=device,
+                    grid_size=30,  # 降低网格大小以提高性能
+                    field_radius=2.0
+                )
+            except Exception as e:
+                print(f"CBF场可视化错误: {e}")
         
         # 更新轨迹线
         for i, line in enumerate(trajectory_lines):
@@ -251,7 +330,7 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
                 line.set_data(all_positions[:frame+1, i, 0], all_positions[:frame+1, i, 1])
         
         # 更新文本信息
-        info_text.set_text(f'时间步: {frame}\n智能体数量: {all_positions.shape[1]}')
+        info_text.set_text(f'时间步: {frame}\n智能体数量: {all_positions.shape[1]}\n高亮智能体: {highlighted_agent}')
         
         # 如果此帧有可用指标，更新指标文本
         if frame < len(min_distances):
@@ -261,8 +340,19 @@ def visualize_trajectory(env, policy_network, cbf_network, device, config, save_
                 avg_cbf = np.mean(cbf_values_history[frame])
                 metrics_info += f'\n平均CBF值: {avg_cbf:.3f}'
             metrics_text.set_text(metrics_info)
+            
+            # 更新右侧面板的动态图表
+            time_steps.append(frame)
+            distance_values.append(min_distances[frame])
+            distance_line.set_data(time_steps, distance_values)
+            
+            # 动态调整右侧面板的y轴范围
+            if distance_values:
+                y_min = min(0, min(distance_values) * 0.9)
+                y_max = max(distance_values) * 1.1
+                ax_metrics.set_ylim(y_min, y_max)
         
-        return agent_patches + trajectory_lines + [info_text, metrics_text]
+        return agent_patches + trajectory_lines + [info_text, metrics_text, distance_line]
     
     # 创建动画
     anim = FuncAnimation(fig, animate, init_func=init, frames=len(all_positions),
@@ -408,8 +498,8 @@ def main():
     
     if policy_config:
         # 使用YAML文件中的配置（支持视觉和其他高级特性）
-        obs_shape = env.get_observation_shape()
-        action_shape = env.get_action_shape()
+        obs_shape = env.observation_shape
+        action_shape = env.action_shape
         
         # 确保policy_head具有正确的输出维度
         if 'policy_head' not in policy_config:
@@ -417,8 +507,8 @@ def main():
         policy_config['policy_head']['output_dim'] = action_shape[-1]
     else:
         # 后备方案：创建默认配置
-        obs_shape = env.get_observation_shape()
-        action_shape = env.get_action_shape()
+        obs_shape = env.observation_shape
+        action_shape = env.action_shape
         
         if len(obs_shape) > 2:  # 视觉输入
             policy_config = {
@@ -490,7 +580,7 @@ def main():
         model_path = os.path.join(args.model_dir, 'models', str(model_step))
     
     # 加载策略网络
-    policy_path = os.path.join(model_path, 'actor.pkl')
+    policy_path = os.path.join(model_path, 'policy.pt')
     if os.path.exists(policy_path):
         policy_network.load_state_dict(torch.load(policy_path, map_location=device))
         print(f"从{policy_path}加载策略网络")
@@ -499,7 +589,7 @@ def main():
     
     # 如果存在，加载CBF网络
     if cbf_network:
-        cbf_path = os.path.join(model_path, 'cbf.pkl')
+        cbf_path = os.path.join(model_path, 'cbf.pt')
         if os.path.exists(cbf_path):
             cbf_network.load_state_dict(torch.load(cbf_path, map_location=device))
             print(f"从{cbf_path}加载CBF网络")
