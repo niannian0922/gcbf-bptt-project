@@ -88,9 +88,11 @@ class MultiAgentEnv(BaseEnv):
                 - 'positions': List of positions [[x1, y1], [x2, y2], ...]
                 - 'radii': List of radii [r1, r2, ...]
                 - 'random': If True, generate random obstacles
-                - 'random_count': Number of random obstacles
+                - 'random_count': Number of random obstacles (or range [min, max])
                 - 'random_min_radius': Minimum radius for random obstacles
                 - 'random_max_radius': Maximum radius for random obstacles
+                - 'dynamic_count': If True, randomize obstacle count each reset
+                - 'count_range': [min_count, max_count] for dynamic obstacle count
         """
         device = next(self.parameters()).device if list(self.parameters()) else torch.device('cpu')
         
@@ -192,6 +194,97 @@ class MultiAgentEnv(BaseEnv):
         else:
             self.static_obstacles = None
     
+    def _generate_dynamic_obstacles(self, batch_size: int = 1) -> Optional[torch.Tensor]:
+        """
+        Generate dynamic obstacles with enhanced randomization.
+        
+        Args:
+            batch_size: Batch size for the tensor
+            
+        Returns:
+            Dynamic obstacle tensor [batch_size, n_obstacles, pos_dim+1] or None
+        """
+        if self.obstacles_config is None:
+            return None
+            
+        device = next(self.parameters()).device if list(self.parameters()) else torch.device('cpu')
+        
+        # 🚀 ENHANCEMENT 1: Dynamic obstacle count randomization
+        dynamic_count = self.obstacles_config.get('dynamic_count', False)
+        if dynamic_count:
+            count_range = self.obstacles_config.get('count_range', [2, 8])
+            min_count, max_count = count_range
+            num_obstacles = np.random.randint(min_count, max_count + 1)
+        else:
+            num_obstacles = self.obstacles_config.get('random_count', 3)
+        
+        if num_obstacles == 0:
+            return None
+        
+        # 🚀 ENHANCEMENT 2: Enhanced obstacle property randomization
+        min_radius = self.obstacles_config.get('random_min_radius', 0.08)  # Increased from 0.1
+        max_radius = self.obstacles_config.get('random_max_radius', 0.5)   # Increased from 0.3
+        
+        # Generate obstacles for each batch element
+        all_obstacles = []
+        for b in range(batch_size):
+            positions = []
+            radii = []
+            
+            for _ in range(num_obstacles):
+                # 🚀 ENHANCEMENT 3: More diverse obstacle placement
+                # Use wider range and avoid clustering
+                max_attempts = 50
+                for attempt in range(max_attempts):
+                    # Generate position with wider area coverage
+                    margin = 0.1  # Reduced margin for more challenging placement
+                    pos = [
+                        np.random.uniform(margin, self.area_size - margin),
+                        np.random.uniform(margin, self.area_size - margin)
+                    ]
+                    
+                    # Generate radius with log-normal distribution for more variety
+                    radius = np.random.uniform(min_radius, max_radius)
+                    
+                    # Check distance from existing obstacles to avoid clustering
+                    valid_position = True
+                    for existing_pos, existing_rad in zip(positions, radii):
+                        dist = np.sqrt((pos[0] - existing_pos[0])**2 + (pos[1] - existing_pos[1])**2)
+                        min_distance = radius + existing_rad + 0.1  # Minimum separation
+                        if dist < min_distance:
+                            valid_position = False
+                            break
+                    
+                    if valid_position or attempt == max_attempts - 1:
+                        positions.append(pos)
+                        radii.append(radius)
+                        break
+            
+            if positions:
+                # Create obstacle tensor for this batch element
+                pos_tensor = torch.tensor(positions, dtype=torch.float32, device=device)
+                rad_tensor = torch.tensor(radii, dtype=torch.float32, device=device).unsqueeze(1)
+                obstacles = torch.cat([pos_tensor, rad_tensor], dim=1)
+                all_obstacles.append(obstacles)
+        
+        if all_obstacles:
+            # Pad obstacles to same size and stack
+            max_obstacles = max(obs.shape[0] for obs in all_obstacles)
+            padded_obstacles = []
+            
+            for obstacles in all_obstacles:
+                if obstacles.shape[0] < max_obstacles:
+                    # Pad with dummy obstacles (position far away, zero radius)
+                    padding_size = max_obstacles - obstacles.shape[0]
+                    dummy_obstacles = torch.zeros(padding_size, 3, device=device)
+                    dummy_obstacles[:, :2] = -100  # Far away position
+                    obstacles = torch.cat([obstacles, dummy_obstacles], dim=0)
+                padded_obstacles.append(obstacles)
+            
+            return torch.stack(padded_obstacles, dim=0)
+        
+        return None
+
     def get_obstacle_tensor(self, batch_size: int = 1) -> Optional[torch.Tensor]:
         """
         Get obstacle tensor for the environment state.
@@ -202,6 +295,10 @@ class MultiAgentEnv(BaseEnv):
         Returns:
             Obstacle tensor [batch_size, n_obstacles, pos_dim+1] or None if no obstacles
         """
+        # 🚀 Use dynamic obstacle generation if enabled
+        if self.obstacles_config and self.obstacles_config.get('dynamic_count', False):
+            return self._generate_dynamic_obstacles(batch_size)
+        
         if self.static_obstacles is None:
             return None
         

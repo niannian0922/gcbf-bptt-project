@@ -46,7 +46,7 @@ class GCBFSafetyLayer(nn.Module):
         # 注册参数
         self.register_buffer('alpha_tensor', torch.tensor([self.alpha], dtype=torch.float32))
         
-    def barrier_function(self, state: MultiAgentState) -> torch.Tensor:
+    def barrier_function(self, state: MultiAgentState, dynamic_margins: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         计算智能体间和智能体-障碍物间的屏障函数值。
         
@@ -69,9 +69,27 @@ class GCBFSafetyLayer(nn.Module):
         # 形状: [batch, n_agents, n_agents]
         dist_squared = torch.sum(pos_diff**2, dim=-1)
         
-        # 计算阈值 (2 * radius + margin)^2
+        # 🚀 CORE INNOVATION: 使用动态安全裕度（如果提供）
         agent_radius = getattr(state, 'agent_radius', 0.05)  # 默认半径
-        threshold = (2 * agent_radius + self.safety_margin)**2
+        
+        # 从已知在GPU上的张量获取正确的设备信息
+        device = dist_squared.device
+        
+        if dynamic_margins is not None:
+            # 使用动态安全裕度：[batch_size, n_agents, 1] -> [batch_size, n_agents, n_agents]
+            # 对于智能体i和j的交互，使用两者裕度的平均值
+            margins_i = dynamic_margins.unsqueeze(2)  # [batch, n_agents, 1, 1]
+            margins_j = dynamic_margins.unsqueeze(1)  # [batch, 1, n_agents, 1]
+            avg_margins = (margins_i + margins_j) / 2.0  # [batch, n_agents, n_agents, 1]
+            avg_margins = avg_margins.squeeze(-1)  # [batch, n_agents, n_agents]
+            
+            # 计算动态阈值 (2 * radius + dynamic_margin)^2
+            # 关键修复：确保threshold张量在正确的设备上
+            threshold = ((2 * agent_radius + avg_margins)**2).to(device)
+        else:
+            # 使用固定安全裕度
+            # 关键修复：确保threshold张量在正确的设备上
+            threshold = torch.tensor((2 * agent_radius + self.safety_margin)**2, device=device)
         
         # 创建屏障值: h(x) = dist_squared - threshold
         # 形状: [batch, n_agents, n_agents]
@@ -97,7 +115,8 @@ class GCBFSafetyLayer(nn.Module):
             
             # 计算阈值: (agent_radius + obstacle_radius + margin)^2
             # 形状: [batch, 1, n_obs]
-            obs_threshold = (agent_radius + obstacle_radii.squeeze(-1).unsqueeze(1) + self.safety_margin)**2
+            # 关键修复：确保obs_threshold张量在正确的设备上
+            obs_threshold = ((agent_radius + obstacle_radii.squeeze(-1).unsqueeze(1) + self.safety_margin)**2).to(device)
             
             # 创建屏障值: h(x) = dist_squared - threshold
             # 形状: [batch, n_agents, n_obs]
@@ -273,6 +292,7 @@ class GCBFSafetyLayer(nn.Module):
         state: MultiAgentState, 
         raw_action: torch.Tensor, 
         alphas: Optional[torch.Tensor] = None,
+        dynamic_margins: Optional[torch.Tensor] = None,
         dynamics_fn: Optional[Callable] = None
     ) -> torch.Tensor:
         """
@@ -282,13 +302,14 @@ class GCBFSafetyLayer(nn.Module):
             state: Current environment state
             raw_action: Raw actions from policy [batch_size, n_agents, action_dim]
             alphas: Dynamic CBF alpha values [batch_size, n_agents, 1] (optional)
+            dynamic_margins: Dynamic safety margins [batch_size, n_agents, 1] (optional)
             dynamics_fn: Optional function to compute control-affine dynamics
             
         Returns:
             Safe actions [batch_size, n_agents, action_dim]
         """
-        # Compute barrier function values
-        h = self.barrier_function(state)
+        # 🚀 CORE INNOVATION: Compute barrier function values with dynamic margins
+        h = self.barrier_function(state, dynamic_margins)
         
         # Compute barrier function Jacobian
         dh_dx = self.barrier_jacobian(state)

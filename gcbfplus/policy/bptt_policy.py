@@ -306,6 +306,7 @@ class PolicyHeadModule(nn.Module):
         
         # 自适应安全边距配置
         self.predict_alpha = config.get('predict_alpha', True)
+        self.predict_margin = config.get('predict_margin', False)  # 新增：是否预测动态安全裕度
         
         # 构建动作预测MLP层
         self.action_layers = nn.ModuleList()
@@ -332,18 +333,31 @@ class PolicyHeadModule(nn.Module):
             )
         else:
             self.alpha_network = None
+            
+        # 🚀 CORE INNOVATION: 动态安全裕度预测网络
+        if self.predict_margin:
+            margin_hidden_dim = config.get('margin_hidden_dim', self.hidden_dims[0] // 4 if self.hidden_dims else 16)
+            self.margin_network = nn.Sequential(
+                nn.Linear(self.input_dim, margin_hidden_dim),
+                self.activation,
+                nn.Linear(margin_hidden_dim, 1),  # 为每个智能体预测单个安全裕度
+                nn.Sigmoid()  # 输出到(0, 1)范围，稍后映射到[min_margin, max_margin]
+            )
+        else:
+            self.margin_network = None
     
-    def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
-        前向传播：生成动作和可选的alpha值。
+        前向传播：生成动作、可选的alpha值和动态安全裕度。
         
         参数:
             features: 输入特征，形状为[batch_size, n_agents, input_dim]或[batch_size, input_dim]
                
         返回:
-            元组(actions, alpha):
+            元组(actions, alpha, dynamic_margins):
             - actions: 动作张量
             - alpha: 动态alpha值（如果启用）或None
+            - dynamic_margins: 动态安全裕度（如果启用）或None
         """
         if features.dim() == 3:  # 多智能体情况
             batch_size, n_agents, input_dim = features.shape
@@ -373,7 +387,14 @@ class PolicyHeadModule(nn.Module):
             else:
                 alpha = None
                 
-            return actions, alpha
+            # 🚀 CORE INNOVATION: 如果启用，通过动态安全裕度网络处理
+            if self.margin_network is not None:
+                margin_flat = self.margin_network(features_flat)
+                dynamic_margins = margin_flat.view(batch_size, n_agents, 1)
+            else:
+                dynamic_margins = None
+                
+            return actions, alpha, dynamic_margins
         else:
             # 简单批处理
             actions = self.action_network(features)
@@ -388,7 +409,13 @@ class PolicyHeadModule(nn.Module):
             else:
                 alpha = None
                 
-            return actions, alpha
+            # 🚀 CORE INNOVATION: 如果启用，通过动态安全裕度网络处理
+            if self.margin_network is not None:
+                dynamic_margins = self.margin_network(features)
+            else:
+                dynamic_margins = None
+                
+            return actions, alpha, dynamic_margins
 
 
 class BPTTPolicy(nn.Module):
@@ -431,17 +458,18 @@ class BPTTPolicy(nn.Module):
         # 存储配置
         self.config = config
     
-    def forward(self, observations: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(self, observations: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
-        前向传播：将观测转换为动作和可选的alpha值。
+        前向传播：将观测转换为动作、可选的alpha值和动态安全裕度。
         
         参数:
             observations: 观测张量
                
         返回:
-            元组(actions, alpha):
+            元组(actions, alpha, dynamic_margins):
             - actions: 动作张量  
             - alpha: 动态alpha值（如果启用）或None
+            - dynamic_margins: 动态安全裕度（如果启用）或None
         """
         # 通过感知模块处理
         features = self.perception(observations)
@@ -449,10 +477,10 @@ class BPTTPolicy(nn.Module):
         # 通过记忆模块处理
         memory_output = self.memory(features)
         
-        # 通过策略头生成动作和alpha
-        actions, alpha = self.policy_head(memory_output)
+        # 通过策略头生成动作、alpha和动态安全裕度
+        actions, alpha, dynamic_margins = self.policy_head(memory_output)
         
-        return actions, alpha
+        return actions, alpha, dynamic_margins
     
     def reset(self) -> None:
         """重置策略的内部状态（例如记忆）。"""

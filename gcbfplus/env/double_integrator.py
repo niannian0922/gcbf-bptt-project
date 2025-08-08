@@ -174,28 +174,148 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         
         # Initialize positions randomly within the environment bounds
         if randomize:
-            # Random positions within the environment bounds
-            positions = torch.rand(batch_size, self.num_agents, self.pos_dim, device=device) * self.area_size
+            # 🚀 ENHANCEMENT 4: More challenging initial state randomization
             
-            # Random goals within the environment bounds
-            goals = torch.rand(batch_size, self.num_agents, self.pos_dim, device=device) * self.area_size
+            # Generate diverse starting configurations
+            config_type = np.random.choice(['corners', 'edges', 'random', 'clustered'], p=[0.3, 0.3, 0.3, 0.1])
+            
+            if config_type == 'corners':
+                # Start agents near corners for more challenging navigation
+                corner_margin = 0.2 * self.area_size
+                positions = torch.zeros(batch_size, self.num_agents, self.pos_dim, device=device)
+                for i in range(self.num_agents):
+                    corner = i % 4  # Cycle through 4 corners
+                    if corner == 0:  # Bottom-left
+                        base_pos = [corner_margin, corner_margin]
+                    elif corner == 1:  # Bottom-right
+                        base_pos = [self.area_size - corner_margin, corner_margin]
+                    elif corner == 2:  # Top-right
+                        base_pos = [self.area_size - corner_margin, self.area_size - corner_margin]
+                    else:  # Top-left
+                        base_pos = [corner_margin, self.area_size - corner_margin]
+                    
+                    # Add small random offset
+                    noise = (torch.rand(batch_size, self.pos_dim, device=device) - 0.5) * 0.1 * self.area_size
+                    positions[:, i, :] = torch.tensor(base_pos, device=device) + noise
+            
+            elif config_type == 'edges':
+                # Start agents along edges
+                positions = torch.zeros(batch_size, self.num_agents, self.pos_dim, device=device)
+                for i in range(self.num_agents):
+                    edge = i % 4  # Cycle through 4 edges
+                    if edge == 0:  # Bottom edge
+                        x = torch.rand(batch_size, device=device) * self.area_size
+                        y = torch.rand(batch_size, device=device) * 0.2 * self.area_size
+                        positions[:, i, :] = torch.stack([x, y], dim=1)
+                    elif edge == 1:  # Right edge
+                        x = (0.8 + 0.2 * torch.rand(batch_size, device=device)) * self.area_size
+                        y = torch.rand(batch_size, device=device) * self.area_size
+                        positions[:, i, :] = torch.stack([x, y], dim=1)
+                    elif edge == 2:  # Top edge
+                        x = torch.rand(batch_size, device=device) * self.area_size
+                        y = (0.8 + 0.2 * torch.rand(batch_size, device=device)) * self.area_size
+                        positions[:, i, :] = torch.stack([x, y], dim=1)
+                    else:  # Left edge
+                        x = torch.rand(batch_size, device=device) * 0.2 * self.area_size
+                        y = torch.rand(batch_size, device=device) * self.area_size
+                        positions[:, i, :] = torch.stack([x, y], dim=1)
+            
+            elif config_type == 'clustered':
+                # Start agents in clusters for cooperation challenges
+                cluster_center = torch.rand(batch_size, 1, self.pos_dim, device=device) * 0.6 * self.area_size + 0.2 * self.area_size
+                cluster_radius = 0.15 * self.area_size
+                positions = cluster_center + (torch.rand(batch_size, self.num_agents, self.pos_dim, device=device) - 0.5) * cluster_radius
+                positions = torch.clamp(positions, 0.05 * self.area_size, 0.95 * self.area_size)
+            
+            else:  # 'random'
+                # Fully random positions with wider distribution
+                margin = 0.05 * self.area_size  # Reduced margin for more challenging starts
+                range_size = self.area_size - 2 * margin
+                positions = torch.rand(batch_size, self.num_agents, self.pos_dim, device=device) * range_size + margin
+            
+            # 🚀 ENHANCEMENT 5: More diverse goal placement strategies
+            goal_strategy = np.random.choice(['opposite', 'random', 'crossover', 'center'], p=[0.4, 0.3, 0.2, 0.1])
+            
+            if goal_strategy == 'opposite':
+                # Goals on opposite side (traditional)
+                goals = self.area_size - positions + (torch.rand_like(positions) - 0.5) * 0.3 * self.area_size
+                goals = torch.clamp(goals, 0.05 * self.area_size, 0.95 * self.area_size)
+            
+            elif goal_strategy == 'crossover':
+                # Agents must cross paths to reach goals
+                goals = torch.flip(positions, dims=[1])  # Reverse agent order
+                # Add some randomization
+                goals += (torch.rand_like(goals) - 0.5) * 0.2 * self.area_size
+                goals = torch.clamp(goals, 0.05 * self.area_size, 0.95 * self.area_size)
+            
+            elif goal_strategy == 'center':
+                # Goals clustered toward center, requiring navigation through middle
+                center = self.area_size / 2
+                center_region = 0.3 * self.area_size
+                goals = torch.rand(batch_size, self.num_agents, self.pos_dim, device=device) * center_region
+                goals += center - center_region / 2
+            
+            else:  # 'random'
+                # Fully random goals
+                margin = 0.05 * self.area_size
+                range_size = self.area_size - 2 * margin
+                goals = torch.rand(batch_size, self.num_agents, self.pos_dim, device=device) * range_size + margin
+            
+            # 🚀 ENHANCEMENT 6: Adaptive minimum distance based on difficulty
+            difficulty_factor = np.random.uniform(0.7, 1.3)  # Vary difficulty
+            min_goal_dist = 0.25 * self.area_size * difficulty_factor
             
             # Ensure goals are not too close to initial positions
-            min_goal_dist = 0.3 * self.area_size
-            
-            # Compute distances between positions and goals
-            dist = torch.norm(positions - goals, dim=2)
-            
-            # Reposition goals that are too close
-            too_close = dist < min_goal_dist
-            while torch.any(too_close):
-                # Replace goals that are too close
-                new_goals = torch.rand(batch_size, self.num_agents, self.pos_dim, device=device) * self.area_size
-                goals = torch.where(too_close.unsqueeze(-1), new_goals, goals)
-                
-                # Recompute distances and check again
+            max_repositioning_attempts = 20
+            for attempt in range(max_repositioning_attempts):
                 dist = torch.norm(positions - goals, dim=2)
                 too_close = dist < min_goal_dist
+                
+                if not torch.any(too_close):
+                    break
+                
+                # Replace goals that are too close with more strategic placement
+                for b in range(batch_size):
+                    for a in range(self.num_agents):
+                        if too_close[b, a]:
+                            # Try to place goal in a challenging but reachable position
+                            agent_pos = positions[b, a].cpu().numpy()
+                            
+                            # Generate candidates in different directions
+                            angles = np.linspace(0, 2*np.pi, 8, endpoint=False)
+                            best_goal = None
+                            best_score = -1
+                            
+                            for angle in angles:
+                                candidate_distance = min_goal_dist + np.random.uniform(0, 0.3 * self.area_size)
+                                candidate_goal = agent_pos + candidate_distance * np.array([np.cos(angle), np.sin(angle)])
+                                
+                                # Check if candidate is within bounds
+                                if (0.05 * self.area_size <= candidate_goal[0] <= 0.95 * self.area_size and
+                                    0.05 * self.area_size <= candidate_goal[1] <= 0.95 * self.area_size):
+                                    
+                                    # Score based on distance from other agents' goals
+                                    other_goals = goals[b, :a].cpu().numpy() if a > 0 else np.array([]).reshape(0, 2)
+                                    if a < self.num_agents - 1:
+                                        other_goals = np.vstack([other_goals, goals[b, a+1:].cpu().numpy()]) if other_goals.size > 0 else goals[b, a+1:].cpu().numpy()
+                                    
+                                    if other_goals.size > 0:
+                                        min_dist_to_others = np.min(np.linalg.norm(other_goals - candidate_goal, axis=1))
+                                        score = min_dist_to_others
+                                    else:
+                                        score = 1.0
+                                    
+                                    if score > best_score:
+                                        best_score = score
+                                        best_goal = candidate_goal
+                            
+                            if best_goal is not None:
+                                goals[b, a] = torch.tensor(best_goal, device=device)
+                            else:
+                                # Fallback: random position far enough
+                                margin = 0.1 * self.area_size
+                                range_size = self.area_size - 2 * margin
+                                goals[b, a] = torch.rand(self.pos_dim, device=device) * range_size + margin
         else:
             # Default initialization: agents in a grid, goals opposite side
             positions = torch.zeros(batch_size, self.num_agents, self.pos_dim, device=device)
