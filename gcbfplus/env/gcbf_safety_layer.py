@@ -9,11 +9,14 @@ from .multi_agent_env import MultiAgentState
 
 class GCBFSafetyLayer(nn.Module):
     """
-    实现控制屏障函数（CBF）约束的可微分安全层。
+    🛡️ PROBABILISTIC SAFETY SHIELD 概率安全防护罩
     
-    该层接收原始动作并过滤它们以确保满足安全约束。
-    设计用于环境的apply_safety_layer方法的一部分。
-    支持自适应安全边距（动态Alpha）机制。
+    重构为概率安全防护罩，输出安全信心分数 alpha_safety (0-1范围)。
+    不再直接过滤动作，而是作为"明智顾问"，基于CBF值评估安全状况。
+    支持自适应安全边距和动态Alpha机制。
+    
+    核心创新：解耦"安全"和"效率"目标，允许策略网络在安全区域自由探索，
+    同时在危险情况下提供安全回退保证。
     """
     
     def __init__(self, config: Dict):
@@ -45,6 +48,9 @@ class GCBFSafetyLayer(nn.Module):
         
         # 注册参数
         self.register_buffer('alpha_tensor', torch.tensor([self.alpha], dtype=torch.float32))
+        
+        # 🛡️ PROBABILISTIC SAFETY SHIELD: 安全信心分数的超参数
+        self.k = config.get('safety_sharpness', 1.0)  # 控制过渡的锐利度
         
     def barrier_function(self, state: MultiAgentState, dynamic_margins: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
@@ -286,6 +292,41 @@ class GCBFSafetyLayer(nn.Module):
             g[:, :, pos_dim+i, i] = 1.0 / m
         
         return f, g
+    
+    def compute_safety_confidence(
+        self, 
+        state: MultiAgentState, 
+        dynamic_margins: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        🛡️ PROBABILISTIC SAFETY SHIELD: 計算安全信心分數
+        
+        基於屏障函數值計算alpha_safety分數，使用sigmoid函數將h(x)映射到[0,1]範圍。
+        
+        Args:
+            state: 當前環境狀態
+            dynamic_margins: 動態安全裕度 [batch_size, n_agents, 1] (可選)
+            
+        Returns:
+            alpha_safety: 安全信心分數 [batch_size, n_agents, 1]
+                         0 = 極度危險，1 = 完全安全
+        """
+        # 計算屏障函數值
+        h_val = self.barrier_function(state, dynamic_margins)
+        
+        # 取最小值（最危險的約束）來代表整體安全狀況
+        # h_val: [batch_size, n_agents, n_constraints]
+        min_h_val, _ = torch.min(h_val, dim=2)  # [batch_size, n_agents]
+        
+        # 使用sigmoid函數將h值映射到[0,1]範圍
+        # h > 0 對應安全狀態（標準CBF約定）
+        # k控制過渡的銳利度
+        alpha_safety = torch.sigmoid(self.k * min_h_val)
+        
+        # 確保輸出形狀為 [batch_size, n_agents, 1]
+        alpha_safety = alpha_safety.unsqueeze(-1)
+        
+        return alpha_safety
     
     def forward(
         self, 

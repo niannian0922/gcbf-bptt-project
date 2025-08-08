@@ -423,8 +423,9 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         if alpha is not None:
             alpha = alpha.to(self.device)
         
-        # Apply safety layer with dynamic alpha if it exists
-        safe_action = self.apply_safety_layer(state, action, alpha)
+        # 🛡️ Apply probabilistic safety shield with dynamic margins
+        # Note: dynamic_margins would be passed from the policy network if available
+        safe_action, alpha_safety = self.apply_safety_layer(state, action, alpha, None)
         
         # Ensure safe_action is also on the correct device
         safe_action = safe_action.to(self.device)
@@ -613,36 +614,58 @@ class DoubleIntegratorEnv(MultiAgentEnv):
         
         return fig
     
-    def apply_safety_layer(self, state: DoubleIntegratorState, raw_action: torch.Tensor, alpha: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def apply_safety_layer(
+        self, 
+        state: DoubleIntegratorState, 
+        raw_action: torch.Tensor, 
+        alpha: Optional[torch.Tensor] = None,
+        dynamic_margins: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Apply safety constraints to raw actions using dynamic alpha values.
+        🛡️ PROBABILISTIC SAFETY SHIELD: 應用概率安全防護罩
+        
+        使用安全信心分數混合策略動作和安全後備動作，而不是直接過濾動作。
+        這解耦了"安全"和"效率"目標。
         
         Args:
             state: Current environment state
-            raw_action: Raw action from policy [batch_size, n_agents, action_dim]
+            raw_action: Raw action from policy [batch_size, n_agents, action_dim] (策略網絡的積極行動)
             alpha: Dynamic CBF alpha values [batch_size, n_agents, 1] (optional)
+            dynamic_margins: Dynamic safety margins [batch_size, n_agents, 1] (optional)
             
         Returns:
-            Safe action [batch_size, n_agents, action_dim]
+            Tuple of (blended_action, alpha_safety):
+            - blended_action: 混合後的最終動作 [batch_size, n_agents, action_dim]
+            - alpha_safety: 安全信心分數 [batch_size, n_agents, 1] or None
         """
         # Store alpha values for logging and potential future use
         if alpha is not None:
             self._current_alpha = alpha
         
-        # If a safety layer is available, use it with dynamic alphas
+        # If a safety layer is available, use it to compute safety confidence
         if hasattr(self, 'safety_layer') and self.safety_layer is not None:
             try:
-                # Call safety layer with dynamic alphas
-                safe_action = self.safety_layer.forward(state, raw_action, alphas=alpha)
-                return safe_action
+                # 🛡️ 計算安全信心分數而不是直接過濾動作
+                alpha_safety = self.safety_layer.compute_safety_confidence(state, dynamic_margins)
+                
+                # 🛡️ 定義超級保守的安全後備動作（懸停，零速度）
+                safe_action = torch.zeros_like(raw_action)  # 懸停動作
+                
+                # 🛡️ 使用安全信心分數混合動作
+                # final_action = alpha_safety * policy_output + (1 - alpha_safety) * safe_action
+                # alpha_safety接近1：信任策略網絡的積極動作
+                # alpha_safety接近0：使用保守的安全動作
+                blended_action = alpha_safety * raw_action + (1 - alpha_safety) * safe_action
+                
+                return blended_action, alpha_safety
+                
             except Exception as e:
-                # If safety layer fails, fall back to raw action
-                # This ensures robustness during training
+                # If safety layer fails, fall back to raw action with no confidence score
                 print(f"Warning: Safety layer failed: {e}. Using raw action.")
-                return raw_action
+                return raw_action, None
         else:
             # Default implementation: return raw action if no safety layer
-            return raw_action
+            return raw_action, None
 
     def dynamics(self, state: DoubleIntegratorState, action: torch.Tensor) -> torch.Tensor:
         """

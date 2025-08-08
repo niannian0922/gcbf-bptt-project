@@ -233,11 +233,29 @@ class BPTTTrainer:
                     safety_loss = torch.mean(torch.relu(-cbf_values))
                     safety_losses.append(safety_loss)
                 
-                # 在环境中使用动态alpha进行一步
+                # 🛡️ PROBABILISTIC SAFETY SHIELD: 在环境中使用动态alpha进行一步
                 step_result = self.env.step(current_state, actions, alpha)
                 next_state = step_result.next_state
                 rewards = step_result.reward
                 costs = step_result.cost
+                
+                # 🛡️ 计算安全信心分数用于新的风险评估损失
+                if hasattr(self.env, 'safety_layer') and self.env.safety_layer is not None:
+                    alpha_safety = self.env.safety_layer.compute_safety_confidence(current_state, dynamic_margins)
+                    # 检查是否发生碰撞（用于新的CBF损失计算）
+                    is_collision = costs > 0  # 假设cost > 0表示碰撞
+                else:
+                    alpha_safety = None
+                    is_collision = costs > 0
+                
+                # 🛡️ 存储安全信心分数和碰撞标志用于新的风险评估损失
+                if alpha_safety is not None:
+                    if not hasattr(self, 'trajectory_alpha_safety'):
+                        self.trajectory_alpha_safety = []
+                    if not hasattr(self, 'trajectory_collisions'):
+                        self.trajectory_collisions = []
+                    self.trajectory_alpha_safety.append(alpha_safety.clone())
+                    self.trajectory_collisions.append(is_collision.clone())
                 
                 # 保存奖励和成本（分离以防止在反向传播期间修改）
                 trajectory_rewards.append(rewards.clone())
@@ -275,8 +293,21 @@ class BPTTTrainer:
                     stacked_diffs = torch.stack(action_diffs)
                     jerk_loss = torch.mean(torch.square(stacked_diffs))
             
-            # 安全损失
-            if safety_losses:
+            # 🛡️ PROBABILISTIC SAFETY SHIELD: 新的风险评估器损失函数
+            # CBF的目的不再是简单地强制h(x) > 0，而是训练GCBF模块成为准确的"风险评估器"
+            if hasattr(self, 'trajectory_alpha_safety') and self.trajectory_alpha_safety:
+                # 实现新的loss_cbf：如果模型在碰撞前"过度自信"（高alpha_safety），则严重惩罚
+                stacked_alpha_safety = torch.stack(self.trajectory_alpha_safety)
+                stacked_collisions = torch.stack(self.trajectory_collisions)
+                
+                # 计算风险评估损失：仅在发生碰撞时惩罚高confidence
+                # loss_cbf = alpha_safety if collision else 0.0
+                collision_mask = stacked_collisions.float()  # 转换布尔值为浮点数
+                risk_assessment_loss = torch.mean(collision_mask * stacked_alpha_safety)
+                total_safety_loss = risk_assessment_loss
+                
+            elif safety_losses:
+                # 回退到传统CBF损失（如果没有使用概率防护罩）
                 stacked_safety = torch.stack(safety_losses)
                 total_safety_loss = torch.mean(stacked_safety)
             else:
@@ -430,6 +461,11 @@ class BPTTTrainer:
             # 🚀 CORE INNOVATION: 清理轨迹裕度列表以准备下一个训练步骤
             if hasattr(self, 'trajectory_margins'):
                 self.trajectory_margins = []
+            # 🛡️ PROBABILISTIC SAFETY SHIELD: 清理安全防护罩相关数据
+            if hasattr(self, 'trajectory_alpha_safety'):
+                self.trajectory_alpha_safety = []
+            if hasattr(self, 'trajectory_collisions'):
+                self.trajectory_collisions = []
         
         pbar.close()
         print("Training completed.")
