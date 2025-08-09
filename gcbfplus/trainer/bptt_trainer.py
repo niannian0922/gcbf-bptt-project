@@ -303,17 +303,28 @@ class BPTTTrainer:
                 # 计算风险评估损失：仅在发生碰撞时惩罚高confidence
                 # loss_cbf = alpha_safety if collision else 0.0
                 collision_mask = stacked_collisions.float()  # 转换布尔值为浮点数
-                # Debug shapes to ensure alignment
+                # === BEGIN: New, Robust Loss Calculation Logic ===
+                # Simplify shapes and explicitly broadcast mask to match alpha across agents
                 print(f"Shape of collision_mask: {collision_mask.shape}")
                 print(f"Shape of stacked_alpha_safety: {stacked_alpha_safety.shape}")
-                # Align alpha_safety shape to match collision mask if needed
-                if stacked_alpha_safety.dim() < collision_mask.dim():
-                    # Assume [T] or [T,1] => expand along agent dimension
-                    num_agents = collision_mask.shape[1]
-                    alpha_expanded = stacked_alpha_safety.unsqueeze(1).expand(-1, num_agents)
+
+                alpha_squeezed = stacked_alpha_safety.squeeze()           # e.g., [T, 1, 2, 1] -> [T, 2]
+                mask_squeezed = collision_mask.squeeze()                   # e.g., [T, 1] -> [T]
+
+                # Ensure mask expands along agent dimension to match alpha
+                if alpha_squeezed.dim() == 1:
+                    # Edge case: single agent; make both [T, 1]
+                    alpha_squeezed = alpha_squeezed.unsqueeze(1)
+                    mask_expanded = mask_squeezed.unsqueeze(1)
                 else:
-                    alpha_expanded = stacked_alpha_safety
-                risk_assessment_loss = torch.mean(collision_mask * alpha_expanded)
+                    num_agents = alpha_squeezed.shape[1]
+                    mask_expanded = mask_squeezed.unsqueeze(1).expand(-1, num_agents)
+
+                print(f"Final shape of mask_expanded: {mask_expanded.shape}")
+                print(f"Final shape of alpha_squeezed: {alpha_squeezed.shape}")
+
+                risk_assessment_loss = torch.mean(mask_expanded * alpha_squeezed)
+                # === END: New, Robust Loss Calculation Logic ===
                 total_safety_loss = risk_assessment_loss
                 
             elif safety_losses:
