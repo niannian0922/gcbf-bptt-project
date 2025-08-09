@@ -303,7 +303,17 @@ class BPTTTrainer:
                 # 计算风险评估损失：仅在发生碰撞时惩罚高confidence
                 # loss_cbf = alpha_safety if collision else 0.0
                 collision_mask = stacked_collisions.float()  # 转换布尔值为浮点数
-                risk_assessment_loss = torch.mean(collision_mask * stacked_alpha_safety)
+                # Debug shapes to ensure alignment
+                print(f"Shape of collision_mask: {collision_mask.shape}")
+                print(f"Shape of stacked_alpha_safety: {stacked_alpha_safety.shape}")
+                # Align alpha_safety shape to match collision mask if needed
+                if stacked_alpha_safety.dim() < collision_mask.dim():
+                    # Assume [T] or [T,1] => expand along agent dimension
+                    num_agents = collision_mask.shape[1]
+                    alpha_expanded = stacked_alpha_safety.unsqueeze(1).expand(-1, num_agents)
+                else:
+                    alpha_expanded = stacked_alpha_safety
+                risk_assessment_loss = torch.mean(collision_mask * alpha_expanded)
                 total_safety_loss = risk_assessment_loss
                 
             elif safety_losses:
